@@ -2,7 +2,7 @@
 
 use crate::compat::Feature;
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList};
 use crate::error::{ParserError, PrinterError};
 use crate::macros::{define_shorthand, enum_property, shorthand_property};
 use crate::printer::Printer;
@@ -542,34 +542,35 @@ pub(crate) struct ColorSchemeHandler;
 impl<'i> PropertyHandler<'i> for ColorSchemeHandler {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
+    let (pos, property) = property;
     match property {
       Property::ColorScheme(color_scheme) => {
         if !context.targets.is_compatible(Feature::LightDark) {
           if color_scheme.contains(ColorScheme::Light) {
-            dest.push(define_var("--lightningcss-light", Token::Ident("initial".into())));
-            dest.push(define_var("--lightningcss-dark", Token::WhiteSpace(" ".into())));
+            dest.push((pos, define_var("--lightningcss-light", Token::Ident("initial".into()))));
+            dest.push((pos, define_var("--lightningcss-dark", Token::WhiteSpace(" ".into()))));
 
             if color_scheme.contains(ColorScheme::Dark) {
               context.add_dark_rule(define_var("--lightningcss-light", Token::WhiteSpace(" ".into())));
               context.add_dark_rule(define_var("--lightningcss-dark", Token::Ident("initial".into())));
             }
           } else if color_scheme.contains(ColorScheme::Dark) {
-            dest.push(define_var("--lightningcss-light", Token::WhiteSpace(" ".into())));
-            dest.push(define_var("--lightningcss-dark", Token::Ident("initial".into())));
+            dest.push((pos, define_var("--lightningcss-light", Token::WhiteSpace(" ".into()))));
+            dest.push((pos, define_var("--lightningcss-dark", Token::Ident("initial".into()))));
           }
         }
-        dest.push(property.clone());
+        dest.push((pos, property.clone()));
         true
       }
       _ => false,
     }
   }
 
-  fn finalize(&mut self, _: &mut DeclarationList<'i>, _: &mut PropertyHandlerContext<'i, '_>) {}
+  fn finalize(&mut self, _: &mut PositionedDeclarationList<'i>, _: &mut PropertyHandlerContext<'i, '_>) {}
 }
 
 #[inline]

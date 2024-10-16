@@ -1,6 +1,6 @@
 use crate::compat::Feature;
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::logical::PropertyCategory;
 use crate::macros::{define_shorthand, rect_shorthand, size_shorthand};
@@ -166,21 +166,22 @@ macro_rules! side_handler {
   ($name: ident, $top: ident, $bottom: ident, $left: ident, $right: ident, $block_start: ident, $block_end: ident, $inline_start: ident, $inline_end: ident, $shorthand: ident, $block_shorthand: ident, $inline_shorthand: ident, $shorthand_category: ident $(, $feature: ident, $shorthand_feature: ident)?) => {
     #[derive(Debug, Default)]
     pub(crate) struct $name<'i> {
-      top: Option<LengthPercentageOrAuto>,
-      bottom: Option<LengthPercentageOrAuto>,
-      left: Option<LengthPercentageOrAuto>,
-      right: Option<LengthPercentageOrAuto>,
-      block_start: Option<Property<'i>>,
-      block_end: Option<Property<'i>>,
-      inline_start: Option<Property<'i>>,
-      inline_end: Option<Property<'i>>,
+      top: PositionedPropertyOption<LengthPercentageOrAuto>,
+      bottom: PositionedPropertyOption<LengthPercentageOrAuto>,
+      left: PositionedPropertyOption<LengthPercentageOrAuto>,
+      right: PositionedPropertyOption<LengthPercentageOrAuto>,
+      block_start: PositionedPropertyOption<Property<'i>>,
+      block_end: PositionedPropertyOption<Property<'i>>,
+      inline_start: PositionedPropertyOption<Property<'i>>,
+      inline_end: PositionedPropertyOption<Property<'i>>,
       has_any: bool,
       category: PropertyCategory
     }
 
     impl<'i> PropertyHandler<'i> for $name<'i> {
-      fn handle_property(&mut self, property: &Property<'i>, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) -> bool {
+      fn handle_property(&mut self, property: (usize, &Property<'i>), dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) -> bool {
         use Property::*;
+        let (pos, property) = property;
 
         macro_rules! flush {
           ($key: ident, $val: expr, $category: ident) => {{
@@ -196,7 +197,7 @@ macro_rules! side_handler {
         macro_rules! property {
           ($key: ident, $val: ident, $category: ident) => {{
             flush!($key, $val, $category);
-            self.$key = Some($val.clone());
+            self.$key = Some((pos, $val.clone()));
             self.category = PropertyCategory::$category;
             self.has_any = true;
           }};
@@ -209,7 +210,7 @@ macro_rules! side_handler {
               self.flush(dest, context);
             }
 
-            self.$prop = Some($val);
+            self.$prop = Some((pos, $val));
             self.category = PropertyCategory::Logical;
             self.has_any = true;
           }};
@@ -253,10 +254,10 @@ macro_rules! side_handler {
             flush!(right, val.right, $shorthand_category);
             flush!(bottom, val.bottom, $shorthand_category);
             flush!(left, val.left, $shorthand_category);
-            self.top = Some(val.top.clone());
-            self.right = Some(val.right.clone());
-            self.bottom = Some(val.bottom.clone());
-            self.left = Some(val.left.clone());
+            self.top = Some((pos, val.top.clone()));
+            self.right = Some((pos, val.right.clone()));
+            self.bottom = Some((pos, val.bottom.clone()));
+            self.left = Some((pos, val.left.clone()));
             self.block_start = None;
             self.block_end = None;
             self.inline_start = None;
@@ -273,7 +274,7 @@ macro_rules! side_handler {
               PropertyId::$inline_end => logical_property!(inline_end, property.clone()),
               _ => {
                 self.flush(dest, context);
-                dest.push(property.clone());
+                dest.push((pos, property.clone()));
               }
             }
           }
@@ -283,13 +284,13 @@ macro_rules! side_handler {
         true
       }
 
-      fn finalize(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+      fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
         self.flush(dest, context);
       }
     }
 
     impl<'i> $name<'i> {
-      fn flush(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+      fn flush(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
         if !self.has_any {
           return
         }
@@ -302,28 +303,31 @@ macro_rules! side_handler {
         let right = std::mem::take(&mut self.right);
         let logical_supported = true $(&& !context.should_compile_logical(Feature::$feature))?;
 
-        if (PropertyCategory::$shorthand_category != PropertyCategory::Logical || logical_supported) && top.is_some() && bottom.is_some() && left.is_some() && right.is_some() {
-          dest.push(Property::$shorthand($shorthand {
-            top: top.unwrap(),
-            right: right.unwrap(),
-            bottom: bottom.unwrap(),
-            left: left.unwrap()
-          }));
+        if (PropertyCategory::$shorthand_category != PropertyCategory::Logical || logical_supported) {
+          if let (Some((top_pos, top)), Some((bottom_pos, bottom)), Some((left_pos, left)), Some((right_pos, right))) = (top, bottom, left, right) {
+            let pos = top_pos.min(bottom_pos).min(left_pos).min(right_pos);
+            dest.push((pos, Property::$shorthand($shorthand {
+              top,
+              right,
+              bottom,
+              left
+            })));
+          }
         } else {
-          if let Some(val) = top {
-            dest.push(Property::$top(val));
+          if let Some((pos, val)) = top {
+            dest.push((pos, Property::$top(val)));
           }
 
-          if let Some(val) = bottom {
-            dest.push(Property::$bottom(val));
+          if let Some((pos, val)) = bottom {
+            dest.push((pos, Property::$bottom(val)));
           }
 
-          if let Some(val) = left {
-            dest.push(Property::$left(val));
+          if let Some((pos, val)) = left {
+            dest.push((pos, Property::$left(val)));
           }
 
-          if let Some(val) = right {
-            dest.push(Property::$right(val));
+          if let Some((pos, val)) = right {
+            dest.push((pos, Property::$right(val)));
           }
         }
 
@@ -335,18 +339,19 @@ macro_rules! side_handler {
         macro_rules! logical_side {
           ($start: ident, $end: ident, $shorthand_prop: ident, $start_prop: ident, $end_prop: ident) => {
             let shorthand_supported = logical_supported $(&& !context.should_compile_logical(Feature::$shorthand_feature))?;
-            if let (Some(Property::$start_prop(start)), Some(Property::$end_prop(end)), true) = (&$start, &$end, shorthand_supported) {
-              dest.push(Property::$shorthand_prop($shorthand_prop {
+            if let (Some((start_pos, Property::$start_prop(start))), Some((end_pos, Property::$end_prop(end))), true) = (&$start, &$end, shorthand_supported) {
+              let pos = *start_pos.min(end_pos);
+              dest.push((pos, Property::$shorthand_prop($shorthand_prop {
                 $start: start.clone(),
                 $end: end.clone()
-              }));
+              })));
             } else {
-              if let Some(val) = $start {
-                dest.push(val);
+              if let Some((pos, val)) = $start {
+                dest.push((pos, val));
               }
 
-              if let Some(val) = $end {
-                dest.push(val);
+              if let Some((pos, val)) = $end {
+                dest.push((pos, val));
               }
             }
           };
@@ -355,11 +360,11 @@ macro_rules! side_handler {
         macro_rules! prop {
           ($val: ident, $logical: ident, $physical: ident) => {
             match $val {
-              Some(Property::$logical(val)) => {
-                dest.push(Property::$physical(val));
+              Some((pos, Property::$logical(val))) => {
+                dest.push((pos, Property::$physical(val)));
               }
-              Some(Property::Unparsed(val)) => {
-                dest.push(Property::Unparsed(val.with_property_id(PropertyId::$physical)));
+              Some((pos, Property::Unparsed(val))) => {
+                dest.push((pos, Property::Unparsed(val.with_property_id(PropertyId::$physical))));
               }
               _ => {}
             }
@@ -376,20 +381,20 @@ macro_rules! side_handler {
         if logical_supported {
           logical_side!(inline_start, inline_end, $inline_shorthand, $inline_start, $inline_end);
         } else if inline_start.is_some() || inline_end.is_some() {
-          if matches!((&inline_start, &inline_end), (Some(Property::$inline_start(start)), Some(Property::$inline_end(end))) if start == end) {
+          if matches!((&inline_start, &inline_end), (Some((_, Property::$inline_start(start))), Some((_, Property::$inline_end(end)))) if start == end) {
             prop!(inline_start, $inline_start, $left);
             prop!(inline_end, $inline_end, $right);
           } else {
             macro_rules! logical_prop {
               ($val: ident, $logical: ident, $ltr: ident, $rtl: ident) => {
                 match $val {
-                  Some(Property::$logical(val)) => {
+                  Some((_, Property::$logical(val))) => {
                     context.add_logical_rule(
                       Property::$ltr(val.clone()),
                       Property::$rtl(val)
                     );
                   }
-                  Some(Property::Unparsed(val)) => {
+                  Some((_, Property::Unparsed(val))) => {
                     context.add_logical_rule(
                       Property::Unparsed(val.with_property_id(PropertyId::$ltr)),
                       Property::Unparsed(val.with_property_id(PropertyId::$rtl))

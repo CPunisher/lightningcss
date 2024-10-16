@@ -3,7 +3,7 @@
 use super::{Property, PropertyId};
 use crate::compat::Feature;
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::macros::{define_shorthand, enum_property};
 use crate::printer::Printer;
@@ -73,25 +73,26 @@ enum_property! {
 
 #[derive(Default)]
 pub(crate) struct OverflowHandler {
-  x: Option<OverflowKeyword>,
-  y: Option<OverflowKeyword>,
+  x: PositionedPropertyOption<OverflowKeyword>,
+  y: PositionedPropertyOption<OverflowKeyword>,
 }
 
 impl<'i> PropertyHandler<'i> for OverflowHandler {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
     use Property::*;
+    let (pos, property) = property;
 
     match property {
-      OverflowX(val) => self.x = Some(*val),
-      OverflowY(val) => self.y = Some(*val),
+      OverflowX(val) => self.x = Some((pos, *val)),
+      OverflowY(val) => self.y = Some((pos, *val)),
       Overflow(val) => {
-        self.x = Some(val.x);
-        self.y = Some(val.y);
+        self.x = Some((pos, val.x));
+        self.y = Some((pos, val.y));
       }
       Unparsed(val)
         if matches!(
@@ -100,7 +101,7 @@ impl<'i> PropertyHandler<'i> for OverflowHandler {
         ) =>
       {
         self.finalize(dest, context);
-        dest.push(property.clone());
+        dest.push((pos, property.clone()));
       }
       _ => return false,
     }
@@ -108,7 +109,7 @@ impl<'i> PropertyHandler<'i> for OverflowHandler {
     true
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList, context: &mut PropertyHandlerContext<'i, '_>) {
     if self.x.is_none() && self.y.is_none() {
       return;
     }
@@ -119,16 +120,18 @@ impl<'i> PropertyHandler<'i> for OverflowHandler {
     match (x, y) {
       // Only use shorthand syntax if the x and y values are the
       // same or the two-value syntax is supported by all targets.
-      (Some(x), Some(y)) if x == y || context.targets.is_compatible(Feature::OverflowShorthand) => {
-        dest.push(Property::Overflow(Overflow { x, y }))
+      (Some((x_pos, x)), Some((y_pos, y)))
+        if x == y || context.targets.is_compatible(Feature::OverflowShorthand) =>
+      {
+        dest.push((x_pos.min(y_pos), Property::Overflow(Overflow { x, y })))
       }
       _ => {
-        if let Some(x) = x {
-          dest.push(Property::OverflowX(x))
+        if let Some((x_pos, x)) = x {
+          dest.push((x_pos, Property::OverflowX(x)))
         }
 
-        if let Some(y) = y {
-          dest.push(Property::OverflowY(y))
+        if let Some((y_pos, y)) = y {
+          dest.push((y_pos, Property::OverflowY(y)))
         }
       }
     }

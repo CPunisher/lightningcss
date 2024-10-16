@@ -2,7 +2,7 @@
 
 use super::PropertyId;
 use crate::context::PropertyHandlerContext;
-use crate::declaration::DeclarationList;
+use crate::declaration::{PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::prefixes::Feature;
 use crate::printer::Printer;
@@ -137,17 +137,18 @@ impl IsCompatible for BoxShadow {
 
 #[derive(Default)]
 pub(crate) struct BoxShadowHandler {
-  box_shadows: Option<(SmallVec<[BoxShadow; 1]>, VendorPrefix)>,
+  box_shadows: PositionedPropertyOption<(SmallVec<[BoxShadow; 1]>, VendorPrefix)>,
   flushed: bool,
 }
 
 impl<'i> PropertyHandler<'i> for BoxShadowHandler {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
+    let (pos, property) = property;
     match property {
       Property::BoxShadow(box_shadows, prefix) => {
         if self.box_shadows.is_some()
@@ -156,16 +157,17 @@ impl<'i> PropertyHandler<'i> for BoxShadowHandler {
           self.flush(dest, context);
         }
 
-        if let Some((val, prefixes)) = &mut self.box_shadows {
+        if let Some((position, (val, prefixes))) = &mut self.box_shadows {
           if val != box_shadows && !prefixes.contains(*prefix) {
             self.flush(dest, context);
-            self.box_shadows = Some((box_shadows.clone(), *prefix));
+            self.box_shadows = Some((pos, (box_shadows.clone(), *prefix)));
           } else {
+            *position = pos;
             *val = box_shadows.clone();
             *prefixes |= *prefix;
           }
         } else {
-          self.box_shadows = Some((box_shadows.clone(), *prefix));
+          self.box_shadows = Some((pos, (box_shadows.clone(), *prefix)));
         }
       }
       Property::Unparsed(unparsed) if matches!(unparsed.property_id, PropertyId::BoxShadow(_)) => {
@@ -173,7 +175,7 @@ impl<'i> PropertyHandler<'i> for BoxShadowHandler {
 
         let mut unparsed = unparsed.clone();
         context.add_unparsed_fallbacks(&mut unparsed);
-        dest.push(Property::Unparsed(unparsed));
+        dest.push((pos, Property::Unparsed(unparsed)));
         self.flushed = true;
       }
       _ => return false,
@@ -182,21 +184,21 @@ impl<'i> PropertyHandler<'i> for BoxShadowHandler {
     true
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     self.flush(dest, context);
     self.flushed = false;
   }
 }
 
 impl BoxShadowHandler {
-  fn flush<'i>(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn flush<'i>(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     if self.box_shadows.is_none() {
       return;
     }
 
     let box_shadows = std::mem::take(&mut self.box_shadows);
 
-    if let Some((box_shadows, prefixes)) = box_shadows {
+    if let Some((pos, (box_shadows, prefixes))) = box_shadows {
       if !self.flushed {
         let mut prefixes = context.targets.prefixes(prefixes, Feature::BoxShadow);
         let mut fallbacks = ColorFallbackKind::empty();
@@ -212,7 +214,7 @@ impl BoxShadowHandler {
               ..shadow.clone()
             })
             .collect();
-          dest.push(Property::BoxShadow(rgb, prefixes));
+          dest.push((pos, Property::BoxShadow(rgb, prefixes)));
           if prefixes.contains(VendorPrefix::None) {
             prefixes = VendorPrefix::None;
           } else {
@@ -229,7 +231,7 @@ impl BoxShadowHandler {
               ..shadow.clone()
             })
             .collect();
-          dest.push(Property::BoxShadow(p3, VendorPrefix::None));
+          dest.push((pos, Property::BoxShadow(p3, VendorPrefix::None)));
         }
 
         if fallbacks.contains(ColorFallbackKind::LAB) {
@@ -240,12 +242,12 @@ impl BoxShadowHandler {
               ..shadow.clone()
             })
             .collect();
-          dest.push(Property::BoxShadow(lab, VendorPrefix::None));
+          dest.push((pos, Property::BoxShadow(lab, VendorPrefix::None)));
         } else {
-          dest.push(Property::BoxShadow(box_shadows, prefixes))
+          dest.push((pos, Property::BoxShadow(box_shadows, prefixes)))
         }
       } else {
-        dest.push(Property::BoxShadow(box_shadows, prefixes))
+        dest.push((pos, Property::BoxShadow(box_shadows, prefixes)))
       }
     }
 

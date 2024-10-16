@@ -4,7 +4,7 @@ use super::background::{BackgroundRepeat, BackgroundSize};
 use super::border_image::{BorderImage, BorderImageRepeat, BorderImageSideWidth, BorderImageSlice};
 use super::PropertyId;
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::macros::{define_list_shorthand, define_shorthand, enum_property, property_bitflags};
 use crate::prefixes::Feature;
@@ -577,20 +577,20 @@ property_bitflags! {
 
 #[derive(Default)]
 pub(crate) struct MaskHandler<'i> {
-  images: Option<(SmallVec<[Image<'i>; 1]>, VendorPrefix)>,
-  positions: Option<(SmallVec<[Position; 1]>, VendorPrefix)>,
-  sizes: Option<(SmallVec<[BackgroundSize; 1]>, VendorPrefix)>,
-  repeats: Option<(SmallVec<[BackgroundRepeat; 1]>, VendorPrefix)>,
-  clips: Option<(SmallVec<[MaskClip; 1]>, VendorPrefix)>,
-  origins: Option<(SmallVec<[GeometryBox; 1]>, VendorPrefix)>,
-  composites: Option<SmallVec<[MaskComposite; 1]>>,
-  modes: Option<SmallVec<[MaskMode; 1]>>,
-  border_source: Option<(Image<'i>, VendorPrefix)>,
-  border_mode: Option<MaskBorderMode>,
-  border_slice: Option<(BorderImageSlice, VendorPrefix)>,
-  border_width: Option<(Rect<BorderImageSideWidth>, VendorPrefix)>,
-  border_outset: Option<(Rect<LengthOrNumber>, VendorPrefix)>,
-  border_repeat: Option<(BorderImageRepeat, VendorPrefix)>,
+  images: PositionedPropertyOption<(SmallVec<[Image<'i>; 1]>, VendorPrefix)>,
+  positions: PositionedPropertyOption<(SmallVec<[Position; 1]>, VendorPrefix)>,
+  sizes: PositionedPropertyOption<(SmallVec<[BackgroundSize; 1]>, VendorPrefix)>,
+  repeats: PositionedPropertyOption<(SmallVec<[BackgroundRepeat; 1]>, VendorPrefix)>,
+  clips: PositionedPropertyOption<(SmallVec<[MaskClip; 1]>, VendorPrefix)>,
+  origins: PositionedPropertyOption<(SmallVec<[GeometryBox; 1]>, VendorPrefix)>,
+  composites: PositionedPropertyOption<SmallVec<[MaskComposite; 1]>>,
+  modes: PositionedPropertyOption<SmallVec<[MaskMode; 1]>>,
+  border_source: PositionedPropertyOption<(Image<'i>, VendorPrefix)>,
+  border_mode: PositionedPropertyOption<MaskBorderMode>,
+  border_slice: PositionedPropertyOption<(BorderImageSlice, VendorPrefix)>,
+  border_width: PositionedPropertyOption<(Rect<BorderImageSideWidth>, VendorPrefix)>,
+  border_outset: PositionedPropertyOption<(Rect<LengthOrNumber>, VendorPrefix)>,
+  border_repeat: PositionedPropertyOption<(BorderImageRepeat, VendorPrefix)>,
   flushed_properties: MaskProperty,
   has_any: bool,
 }
@@ -598,15 +598,16 @@ pub(crate) struct MaskHandler<'i> {
 impl<'i> PropertyHandler<'i> for MaskHandler<'i> {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
+    let (pos, property) = property;
     macro_rules! maybe_flush {
       ($prop: ident, $val: expr, $vp: expr) => {{
         // If two vendor prefixes for the same property have different
         // values, we need to flush what we have immediately to preserve order.
-        if let Some((val, prefixes)) = &self.$prop {
+        if let Some((_, (val, prefixes))) = &self.$prop {
           if val != $val && !prefixes.contains(*$vp) {
             self.flush(dest, context);
           }
@@ -623,11 +624,12 @@ impl<'i> PropertyHandler<'i> for MaskHandler<'i> {
         maybe_flush!($prop, $val, $vp);
 
         // Otherwise, update the value and add the prefix.
-        if let Some((val, prefixes)) = &mut self.$prop {
+        if let Some((position, (val, prefixes))) = &mut self.$prop {
+          *position = pos;
           *val = $val.clone();
           *prefixes |= *$vp;
         } else {
-          self.$prop = Some(($val.clone(), *$vp));
+          self.$prop = Some((pos, ($val.clone(), *$vp)));
           self.has_any = true;
         }
       }};
@@ -665,8 +667,8 @@ impl<'i> PropertyHandler<'i> for MaskHandler<'i> {
       Property::MaskRepeat(val, vp) => property!(repeats, val, vp),
       Property::MaskClip(val, vp) => property!(clips, val, vp),
       Property::MaskOrigin(val, vp) => property!(origins, val, vp),
-      Property::MaskComposite(val) => self.composites = Some(val.clone()),
-      Property::MaskMode(val) => self.modes = Some(val.clone()),
+      Property::MaskComposite(val) => self.composites = Some((pos, val.clone())),
+      Property::MaskMode(val) => self.modes = Some((pos, val.clone())),
       Property::Mask(val, prefix) => {
         let images = val.iter().map(|b| b.image.clone()).collect();
         maybe_flush!(images, &images, prefix);
@@ -686,8 +688,8 @@ impl<'i> PropertyHandler<'i> for MaskHandler<'i> {
         let origins = val.iter().map(|b| b.origin.clone()).collect();
         maybe_flush!(origins, &origins, prefix);
 
-        self.composites = Some(val.iter().map(|b| b.composite.clone()).collect());
-        self.modes = Some(val.iter().map(|b| b.mode.clone()).collect());
+        self.composites = Some((pos, val.iter().map(|b| b.composite.clone()).collect()));
+        self.modes = Some((pos, val.iter().map(|b| b.mode.clone()).collect()));
 
         property!(images, &images, prefix);
         property!(positions, &positions, prefix);
@@ -703,11 +705,11 @@ impl<'i> PropertyHandler<'i> for MaskHandler<'i> {
         self
           .flushed_properties
           .insert(MaskProperty::try_from(&val.property_id).unwrap());
-        dest.push(Property::Unparsed(unparsed));
+        dest.push((pos, Property::Unparsed(unparsed)));
       }
       Property::MaskBorderSource(val) => property!(border_source, val, &VendorPrefix::None),
       Property::WebKitMaskBoxImageSource(val, _) => property!(border_source, val, &VendorPrefix::WebKit),
-      Property::MaskBorderMode(val) => self.border_mode = Some(val.clone()),
+      Property::MaskBorderMode(val) => self.border_mode = Some((pos, val.clone())),
       Property::MaskBorderSlice(val) => property!(border_slice, val, &VendorPrefix::None),
       Property::WebKitMaskBoxImageSlice(val, _) => property!(border_slice, val, &VendorPrefix::WebKit),
       Property::MaskBorderWidth(val) => property!(border_width, val, &VendorPrefix::None),
@@ -718,7 +720,7 @@ impl<'i> PropertyHandler<'i> for MaskHandler<'i> {
       Property::WebKitMaskBoxImageRepeat(val, _) => property!(border_repeat, val, &VendorPrefix::WebKit),
       Property::MaskBorder(val) => {
         border_shorthand!(val, VendorPrefix::None);
-        self.border_mode = Some(val.mode.clone());
+        self.border_mode = Some((pos, val.mode.clone()));
       }
       Property::WebKitMaskBoxImage(val, _) => {
         border_shorthand!(val, VendorPrefix::WebKit);
@@ -735,7 +737,7 @@ impl<'i> PropertyHandler<'i> for MaskHandler<'i> {
             let mut clone = val.clone();
             clone.property_id = property_id;
             context.add_unparsed_fallbacks(&mut clone);
-            dest.push(Property::Unparsed(clone));
+            dest.push((pos, Property::Unparsed(clone)));
           }
         }
 
@@ -743,7 +745,7 @@ impl<'i> PropertyHandler<'i> for MaskHandler<'i> {
         self
           .flushed_properties
           .insert(MaskProperty::try_from(&val.property_id).unwrap());
-        dest.push(Property::Unparsed(val));
+        dest.push((pos, Property::Unparsed(val)));
       }
       _ => return false,
     }
@@ -752,14 +754,14 @@ impl<'i> PropertyHandler<'i> for MaskHandler<'i> {
     true
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     self.flush(dest, context);
     self.flushed_properties = MaskProperty::empty();
   }
 }
 
 impl<'i> MaskHandler<'i> {
-  fn flush(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn flush(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     if !self.has_any {
       return;
     }
@@ -770,7 +772,11 @@ impl<'i> MaskHandler<'i> {
     self.flush_mask_border(dest, context);
   }
 
-  fn flush_mask(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn flush_mask(
+    &mut self,
+    dest: &mut PositionedDeclarationList<'i>,
+    context: &mut PropertyHandlerContext<'i, '_>,
+  ) {
     let mut images = std::mem::take(&mut self.images);
     let mut positions = std::mem::take(&mut self.positions);
     let mut sizes = std::mem::take(&mut self.sizes);
@@ -781,14 +787,14 @@ impl<'i> MaskHandler<'i> {
     let mut modes = std::mem::take(&mut self.modes);
 
     if let (
-      Some((images, images_vp)),
-      Some((positions, positions_vp)),
-      Some((sizes, sizes_vp)),
-      Some((repeats, repeats_vp)),
-      Some((clips, clips_vp)),
-      Some((origins, origins_vp)),
-      Some(composites_val),
-      Some(mode_vals),
+      Some((images_pos, (images, images_vp))),
+      Some((positions_pos, (positions, positions_vp))),
+      Some((sizes_pos, (sizes, sizes_vp))),
+      Some((repeats_pos, (repeats, repeats_vp))),
+      Some((clips_pos, (clips, clips_vp))),
+      Some((origins_pos, (origins, origins_vp))),
+      Some((composites_pos, composites_val)),
+      Some((mode_vals_pos, mode_vals)),
     ) = (
       &mut images,
       &mut positions,
@@ -833,6 +839,15 @@ impl<'i> MaskHandler<'i> {
         })
         .collect();
 
+        let mask_pos = *images_pos
+          .min(positions_pos)
+          .min(sizes_pos)
+          .min(repeats_pos)
+          .min(clips_pos)
+          .min(origins_pos)
+          .min(composites_pos)
+          .min(mode_vals_pos);
+
         let mut prefix = context.targets.prefixes(intersection, Feature::Mask);
         if !self.flushed_properties.intersects(MaskProperty::Mask) {
           for fallback in masks.get_fallbacks(context.targets) {
@@ -847,7 +862,7 @@ impl<'i> MaskHandler<'i> {
             if p.is_empty() {
               p = prefix;
             }
-            self.flush_mask_shorthand(fallback, p, dest);
+            self.flush_mask_shorthand(mask_pos, fallback, p, dest);
           }
 
           let p = masks
@@ -860,7 +875,7 @@ impl<'i> MaskHandler<'i> {
           }
         }
 
-        self.flush_mask_shorthand(masks, prefix, dest);
+        self.flush_mask_shorthand(mask_pos, masks, prefix, dest);
         self.flushed_properties.insert(MaskProperty::Mask);
 
         images_vp.remove(intersection);
@@ -876,17 +891,17 @@ impl<'i> MaskHandler<'i> {
 
     macro_rules! prop {
       ($var: ident, $property: ident) => {
-        if let Some((val, vp)) = $var {
+        if let Some((pos, (val, vp))) = $var {
           if !vp.is_empty() {
             let prefix = context.targets.prefixes(vp, Feature::$property);
-            dest.push(Property::$property(val, prefix));
+            dest.push((pos, Property::$property(val, prefix)));
             self.flushed_properties.insert(MaskProperty::$property);
           }
         }
       };
     }
 
-    if let Some((mut images, vp)) = images {
+    if let Some((pos, (mut images, vp))) = images {
       if !vp.is_empty() {
         let mut prefix = vp;
         if !self.flushed_properties.contains(MaskProperty::MaskImage) {
@@ -903,7 +918,7 @@ impl<'i> MaskHandler<'i> {
             if p.is_empty() {
               p = prefix;
             }
-            dest.push(Property::MaskImage(fallback, p))
+            dest.push((pos, Property::MaskImage(fallback, p)))
           }
 
           let p = images
@@ -916,7 +931,7 @@ impl<'i> MaskHandler<'i> {
           }
         }
 
-        dest.push(Property::MaskImage(images, prefix));
+        dest.push((pos, Property::MaskImage(images, prefix)));
         self.flushed_properties.insert(MaskProperty::MaskImage);
       }
     }
@@ -927,37 +942,39 @@ impl<'i> MaskHandler<'i> {
     prop!(clips, MaskClip);
     prop!(origins, MaskOrigin);
 
-    if let Some(composites) = composites {
+    if let Some((pos, composites)) = composites {
       let prefix = context.targets.prefixes(VendorPrefix::None, Feature::MaskComposite);
       if prefix.contains(VendorPrefix::WebKit) {
-        dest.push(Property::WebKitMaskComposite(
-          composites.iter().map(|c| (*c).into()).collect(),
+        dest.push((
+          pos,
+          Property::WebKitMaskComposite(composites.iter().map(|c| (*c).into()).collect()),
         ));
       }
 
-      dest.push(Property::MaskComposite(composites));
+      dest.push((pos, Property::MaskComposite(composites)));
       self.flushed_properties.insert(MaskProperty::MaskComposite);
     }
 
-    if let Some(modes) = modes {
+    if let Some((pos, modes)) = modes {
       let prefix = context.targets.prefixes(VendorPrefix::None, Feature::Mask);
       if prefix.contains(VendorPrefix::WebKit) {
-        dest.push(Property::WebKitMaskSourceType(
-          modes.iter().map(|c| (*c).into()).collect(),
-          VendorPrefix::WebKit,
+        dest.push((
+          pos,
+          Property::WebKitMaskSourceType(modes.iter().map(|c| (*c).into()).collect(), VendorPrefix::WebKit),
         ));
       }
 
-      dest.push(Property::MaskMode(modes));
+      dest.push((pos, Property::MaskMode(modes)));
       self.flushed_properties.insert(MaskProperty::MaskMode);
     }
   }
 
   fn flush_mask_shorthand(
     &self,
+    mask_pos: usize,
     masks: SmallVec<[Mask<'i>; 1]>,
     prefix: VendorPrefix,
-    dest: &mut DeclarationList<'i>,
+    dest: &mut PositionedDeclarationList<'i>,
   ) {
     if prefix.contains(VendorPrefix::WebKit)
       && masks
@@ -986,24 +1003,28 @@ impl<'i> MaskHandler<'i> {
         modes.push(mode.into());
       }
 
-      dest.push(Property::Mask(webkit, VendorPrefix::WebKit));
+      dest.push((mask_pos, Property::Mask(webkit, VendorPrefix::WebKit)));
       if needs_composites {
-        dest.push(Property::WebKitMaskComposite(composites));
+        dest.push((mask_pos, Property::WebKitMaskComposite(composites)));
       }
       if needs_modes {
-        dest.push(Property::WebKitMaskSourceType(modes, VendorPrefix::WebKit));
+        dest.push((mask_pos, Property::WebKitMaskSourceType(modes, VendorPrefix::WebKit)));
       }
 
       let prefix = prefix - VendorPrefix::WebKit;
       if !prefix.is_empty() {
-        dest.push(Property::Mask(masks, prefix));
+        dest.push((mask_pos, Property::Mask(masks, prefix)));
       }
     } else {
-      dest.push(Property::Mask(masks, prefix));
+      dest.push((mask_pos, Property::Mask(masks, prefix)));
     }
   }
 
-  fn flush_mask_border(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn flush_mask_border(
+    &mut self,
+    dest: &mut PositionedDeclarationList<'i>,
+    context: &mut PropertyHandlerContext<'i, '_>,
+  ) {
     let mut source = std::mem::take(&mut self.border_source);
     let mut slice = std::mem::take(&mut self.border_slice);
     let mut width = std::mem::take(&mut self.border_width);
@@ -1012,23 +1033,31 @@ impl<'i> MaskHandler<'i> {
     let mut mode = std::mem::take(&mut self.border_mode);
 
     if let (
-      Some((source, source_vp)),
-      Some((slice, slice_vp)),
-      Some((width, width_vp)),
-      Some((outset, outset_vp)),
-      Some((repeat, repeat_vp)),
+      Some((source_pos, (source, source_vp))),
+      Some((slice_pos, (slice, slice_vp))),
+      Some((width_pos, (width, width_vp))),
+      Some((outset_pos, (outset, outset_vp))),
+      Some((repeat_pos, (repeat, repeat_vp))),
     ) = (&mut source, &mut slice, &mut width, &mut outset, &mut repeat)
     {
       let intersection = *source_vp & *slice_vp & *width_vp & *outset_vp & *repeat_vp;
       if !intersection.is_empty() && (!intersection.contains(VendorPrefix::None) || mode.is_some()) {
+        let (mut mode_pos, mode_val) = mode.unwrap_or((usize::MAX, Default::default()));
         let mut mask_border = MaskBorder {
           source: source.clone(),
           slice: slice.clone(),
           width: width.clone(),
           outset: outset.clone(),
           repeat: repeat.clone(),
-          mode: mode.unwrap_or_default(),
+          mode: mode_val.clone(),
         };
+
+        let mask_border_pos = *source_pos
+          .min(slice_pos)
+          .min(width_pos)
+          .min(outset_pos)
+          .min(repeat_pos)
+          .min(&mut mode_pos);
 
         let mut prefix = context.targets.prefixes(intersection, Feature::MaskBorder);
         if !self.flushed_properties.intersects(MaskProperty::MaskBorder) {
@@ -1041,14 +1070,14 @@ impl<'i> MaskHandler<'i> {
             }
 
             if p.contains(VendorPrefix::WebKit) {
-              dest.push(Property::WebKitMaskBoxImage(
-                fallback.clone().into(),
-                VendorPrefix::WebKit,
+              dest.push((
+                mask_border_pos,
+                Property::WebKitMaskBoxImage(fallback.clone().into(), VendorPrefix::WebKit),
               ));
             }
 
             if p.contains(VendorPrefix::None) {
-              dest.push(Property::MaskBorder(fallback));
+              dest.push((mask_border_pos, Property::MaskBorder(fallback)));
             }
           }
         }
@@ -1059,14 +1088,14 @@ impl<'i> MaskHandler<'i> {
         }
 
         if prefix.contains(VendorPrefix::WebKit) {
-          dest.push(Property::WebKitMaskBoxImage(
-            mask_border.clone().into(),
-            VendorPrefix::WebKit,
+          dest.push((
+            mask_border_pos,
+            Property::WebKitMaskBoxImage(mask_border.clone().into(), VendorPrefix::WebKit),
           ));
         }
 
         if prefix.contains(VendorPrefix::None) {
-          dest.push(Property::MaskBorder(mask_border));
+          dest.push((mask_border_pos, Property::MaskBorder(mask_border)));
           self.flushed_properties.insert(MaskProperty::MaskBorder);
           mode = None;
         }
@@ -1079,7 +1108,7 @@ impl<'i> MaskHandler<'i> {
       }
     }
 
-    if let Some((mut source, mut prefix)) = source {
+    if let Some((pos, (mut source, mut prefix))) = source {
       prefix = context.targets.prefixes(prefix, Feature::MaskBorderSource);
 
       if !self.flushed_properties.contains(MaskProperty::MaskBorderSource) {
@@ -1087,38 +1116,41 @@ impl<'i> MaskHandler<'i> {
         let fallbacks = source.get_fallbacks(context.targets);
         for fallback in fallbacks {
           if prefix.contains(VendorPrefix::WebKit) {
-            dest.push(Property::WebKitMaskBoxImageSource(
-              fallback.clone(),
-              VendorPrefix::WebKit,
+            dest.push((
+              pos,
+              Property::WebKitMaskBoxImageSource(fallback.clone(), VendorPrefix::WebKit),
             ));
           }
 
           if prefix.contains(VendorPrefix::None) {
-            dest.push(Property::MaskBorderSource(fallback));
+            dest.push((pos, Property::MaskBorderSource(fallback)));
           }
         }
       }
 
       if prefix.contains(VendorPrefix::WebKit) {
-        dest.push(Property::WebKitMaskBoxImageSource(source.clone(), VendorPrefix::WebKit));
+        dest.push((
+          pos,
+          Property::WebKitMaskBoxImageSource(source.clone(), VendorPrefix::WebKit),
+        ));
       }
 
       if prefix.contains(VendorPrefix::None) {
-        dest.push(Property::MaskBorderSource(source));
+        dest.push((pos, Property::MaskBorderSource(source)));
         self.flushed_properties.insert(MaskProperty::MaskBorderSource);
       }
     }
 
     macro_rules! prop {
       ($val: expr, $prop: ident, $webkit: ident) => {
-        if let Some((val, mut prefix)) = $val {
+        if let Some((pos, (val, mut prefix))) = $val {
           prefix = context.targets.prefixes(prefix, Feature::$prop);
           if prefix.contains(VendorPrefix::WebKit) {
-            dest.push(Property::$webkit(val.clone(), VendorPrefix::WebKit));
+            dest.push((pos, Property::$webkit(val.clone(), VendorPrefix::WebKit)));
           }
 
           if prefix.contains(VendorPrefix::None) {
-            dest.push(Property::$prop(val));
+            dest.push((pos, Property::$prop(val)));
           }
           self.flushed_properties.insert(MaskProperty::$prop);
         }
@@ -1130,8 +1162,8 @@ impl<'i> MaskHandler<'i> {
     prop!(outset, MaskBorderOutset, WebKitMaskBoxImageOutset);
     prop!(repeat, MaskBorderRepeat, WebKitMaskBoxImageRepeat);
 
-    if let Some(mode) = mode {
-      dest.push(Property::MaskBorderMode(mode));
+    if let Some((pos, mode)) = mode {
+      dest.push((pos, Property::MaskBorderMode(mode)));
       self.flushed_properties.insert(MaskProperty::MaskBorderMode);
     }
   }

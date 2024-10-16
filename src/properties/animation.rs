@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::macros::*;
 use crate::prefixes::Feature;
@@ -406,7 +406,11 @@ pub enum TimelineRangeName {
 /// or [animation-range-end](https://drafts.csswg.org/scroll-animations/#animation-range-end) property.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "visitor", derive(Visit))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(rename_all = "lowercase"))]
+#[cfg_attr(
+  feature = "serde",
+  derive(serde::Serialize, serde::Deserialize),
+  serde(rename_all = "lowercase")
+)]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "into_owned", derive(static_self::IntoOwned))]
 pub enum AnimationAttachmentRange {
@@ -717,32 +721,34 @@ pub type AnimationList<'i> = SmallVec<[Animation<'i>; 1]>;
 
 #[derive(Default)]
 pub(crate) struct AnimationHandler<'i> {
-  names: Option<(SmallVec<[AnimationName<'i>; 1]>, VendorPrefix)>,
-  durations: Option<(SmallVec<[Time; 1]>, VendorPrefix)>,
-  timing_functions: Option<(SmallVec<[EasingFunction; 1]>, VendorPrefix)>,
-  iteration_counts: Option<(SmallVec<[AnimationIterationCount; 1]>, VendorPrefix)>,
-  directions: Option<(SmallVec<[AnimationDirection; 1]>, VendorPrefix)>,
-  play_states: Option<(SmallVec<[AnimationPlayState; 1]>, VendorPrefix)>,
-  delays: Option<(SmallVec<[Time; 1]>, VendorPrefix)>,
-  fill_modes: Option<(SmallVec<[AnimationFillMode; 1]>, VendorPrefix)>,
-  timelines: Option<SmallVec<[AnimationTimeline<'i>; 1]>>,
-  range_starts: Option<SmallVec<[AnimationRangeStart; 1]>>,
-  range_ends: Option<SmallVec<[AnimationRangeEnd; 1]>>,
+  names: PositionedPropertyOption<(SmallVec<[AnimationName<'i>; 1]>, VendorPrefix)>,
+  durations: PositionedPropertyOption<(SmallVec<[Time; 1]>, VendorPrefix)>,
+  timing_functions: PositionedPropertyOption<(SmallVec<[EasingFunction; 1]>, VendorPrefix)>,
+  iteration_counts: PositionedPropertyOption<(SmallVec<[AnimationIterationCount; 1]>, VendorPrefix)>,
+  directions: PositionedPropertyOption<(SmallVec<[AnimationDirection; 1]>, VendorPrefix)>,
+  play_states: PositionedPropertyOption<(SmallVec<[AnimationPlayState; 1]>, VendorPrefix)>,
+  delays: PositionedPropertyOption<(SmallVec<[Time; 1]>, VendorPrefix)>,
+  fill_modes: PositionedPropertyOption<(SmallVec<[AnimationFillMode; 1]>, VendorPrefix)>,
+  timelines: PositionedPropertyOption<SmallVec<[AnimationTimeline<'i>; 1]>>,
+  range_starts: PositionedPropertyOption<SmallVec<[AnimationRangeStart; 1]>>,
+  range_ends: PositionedPropertyOption<SmallVec<[AnimationRangeEnd; 1]>>,
   has_any: bool,
 }
 
 impl<'i> PropertyHandler<'i> for AnimationHandler<'i> {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
+    let (pos, property) = property;
+
     macro_rules! maybe_flush {
       ($prop: ident, $val: expr, $vp: ident) => {{
         // If two vendor prefixes for the same property have different
         // values, we need to flush what we have immediately to preserve order.
-        if let Some((val, prefixes)) = &self.$prop {
+        if let Some((_, (val, prefixes))) = &self.$prop {
           if val != $val && !prefixes.contains(*$vp) {
             self.flush(dest, context);
           }
@@ -755,11 +761,12 @@ impl<'i> PropertyHandler<'i> for AnimationHandler<'i> {
         maybe_flush!($prop, $val, $vp);
 
         // Otherwise, update the value and add the prefix.
-        if let Some((val, prefixes)) = &mut self.$prop {
+        if let Some((position, (val, prefixes))) = &mut self.$prop {
+          *position = pos;
           *val = $val.clone();
           *prefixes |= *$vp;
         } else {
-          self.$prop = Some(($val.clone(), *$vp));
+          self.$prop = Some((pos, ($val.clone(), *$vp)));
           self.has_any = true;
         }
       }};
@@ -775,20 +782,20 @@ impl<'i> PropertyHandler<'i> for AnimationHandler<'i> {
       Property::AnimationDelay(val, vp) => property!(delays, val, vp),
       Property::AnimationFillMode(val, vp) => property!(fill_modes, val, vp),
       Property::AnimationTimeline(val) => {
-        self.timelines = Some(val.clone());
+        self.timelines = Some((pos, val.clone()));
         self.has_any = true;
       }
       Property::AnimationRangeStart(val) => {
-        self.range_starts = Some(val.clone());
+        self.range_starts = Some((pos, val.clone()));
         self.has_any = true;
       }
       Property::AnimationRangeEnd(val) => {
-        self.range_ends = Some(val.clone());
+        self.range_ends = Some((pos, val.clone()));
         self.has_any = true;
       }
       Property::AnimationRange(val) => {
-        self.range_starts = Some(val.iter().map(|v| v.start.clone()).collect());
-        self.range_ends = Some(val.iter().map(|v| v.end.clone()).collect());
+        self.range_starts = Some((pos, val.iter().map(|v| v.start.clone()).collect()));
+        self.range_ends = Some((pos, val.iter().map(|v| v.end.clone()).collect()));
         self.has_any = true;
       }
       Property::Animation(val, vp) => {
@@ -816,7 +823,7 @@ impl<'i> PropertyHandler<'i> for AnimationHandler<'i> {
         let fill_modes = val.iter().map(|b| b.fill_mode.clone()).collect();
         maybe_flush!(fill_modes, &fill_modes, vp);
 
-        self.timelines = Some(val.iter().map(|b| b.timeline.clone()).collect());
+        self.timelines = Some((pos, val.iter().map(|b| b.timeline.clone()).collect()));
 
         property!(names, &names, vp);
         property!(durations, &durations, vp);
@@ -864,8 +871,9 @@ impl<'i> PropertyHandler<'i> for AnimationHandler<'i> {
         }
 
         self.flush(dest, context);
-        dest.push(Property::Unparsed(
-          val.get_prefixed(context.targets, Feature::Animation),
+        dest.push((
+          pos,
+          Property::Unparsed(val.get_prefixed(context.targets, Feature::Animation)),
         ));
       }
       _ => return false,
@@ -874,13 +882,13 @@ impl<'i> PropertyHandler<'i> for AnimationHandler<'i> {
     true
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     self.flush(dest, context);
   }
 }
 
 impl<'i> AnimationHandler<'i> {
-  fn flush(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn flush(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     if !self.has_any {
       return;
     }
@@ -900,14 +908,14 @@ impl<'i> AnimationHandler<'i> {
     let range_ends = std::mem::take(&mut self.range_ends);
 
     if let (
-      Some((names, names_vp)),
-      Some((durations, durations_vp)),
-      Some((timing_functions, timing_functions_vp)),
-      Some((iteration_counts, iteration_counts_vp)),
-      Some((directions, directions_vp)),
-      Some((play_states, play_states_vp)),
-      Some((delays, delays_vp)),
-      Some((fill_modes, fill_modes_vp)),
+      Some((names_pos, (names, names_vp))),
+      Some((durations_pos, (durations, durations_vp))),
+      Some((timing_functions_pos, (timing_functions, timing_functions_vp))),
+      Some((iteration_counts_pos, (iteration_counts, iteration_counts_vp))),
+      Some((directions_pos, (directions, directions_vp))),
+      Some((play_states_pos, (play_states, play_states_vp))),
+      Some((delays_pos, (delays, delays_vp))),
+      Some((fill_modes_pos, (fill_modes, fill_modes_vp))),
     ) = (
       &mut names,
       &mut durations,
@@ -928,13 +936,16 @@ impl<'i> AnimationHandler<'i> {
         & *play_states_vp
         & *delays_vp
         & *fill_modes_vp;
-      let mut timelines = if let Some(timelines) = &mut timelines_value {
-        Cow::Borrowed(timelines)
+      let (timelines_pos, mut timelines) = if let Some((pos, timelines)) = &mut timelines_value {
+        (Some(*pos), Cow::Borrowed(timelines))
       } else if !intersection.contains(VendorPrefix::None) {
         // Prefixed animation shorthand does not support animation-timeline
-        Cow::Owned(std::iter::repeat(AnimationTimeline::Auto).take(len).collect())
+        (
+          None,
+          Cow::Owned(std::iter::repeat(AnimationTimeline::Auto).take(len).collect()),
+        )
       } else {
-        Cow::Owned(SmallVec::new())
+        (None, Cow::Owned(SmallVec::new()))
       };
 
       if !intersection.is_empty()
@@ -947,15 +958,18 @@ impl<'i> AnimationHandler<'i> {
         && fill_modes.len() == len
         && timelines.len() == len
       {
-        let timeline_property = if timelines.iter().any(|t| *t != AnimationTimeline::Auto)
+        let (timeline_property_pos, timeline_property) = if timelines.iter().any(|t| *t != AnimationTimeline::Auto)
           && (intersection != VendorPrefix::None
             || !context
               .targets
               .is_compatible(crate::compat::Feature::AnimationTimelineShorthand))
         {
-          Some(Property::AnimationTimeline(timelines.clone().into_owned()))
+          (
+            timelines_pos,
+            Some(Property::AnimationTimeline(timelines.clone().into_owned())),
+          )
         } else {
-          None
+          (None, None)
         };
 
         let animations = izip!(
@@ -1000,7 +1014,18 @@ impl<'i> AnimationHandler<'i> {
         )
         .collect();
         let prefix = context.targets.prefixes(intersection, Feature::Animation);
-        dest.push(Property::Animation(animations, prefix));
+        dest.push((
+          *names_pos
+            .min(durations_pos)
+            .min(timing_functions_pos)
+            .min(iteration_counts_pos)
+            .min(directions_pos)
+            .min(play_states_pos)
+            .min(delays_pos)
+            .min(fill_modes_pos)
+            .min(&mut timelines_pos.unwrap_or(usize::MAX)),
+          Property::Animation(animations, prefix),
+        ));
         names_vp.remove(intersection);
         durations_vp.remove(intersection);
         timing_functions_vp.remove(intersection);
@@ -1010,8 +1035,8 @@ impl<'i> AnimationHandler<'i> {
         delays_vp.remove(intersection);
         fill_modes_vp.remove(intersection);
 
-        if let Some(p) = timeline_property {
-          dest.push(p);
+        if let (Some(pos), Some(p)) = (timeline_property_pos, timeline_property) {
+          dest.push((pos, p));
         }
         timelines_value = None;
       }
@@ -1019,10 +1044,10 @@ impl<'i> AnimationHandler<'i> {
 
     macro_rules! prop {
       ($var: ident, $property: ident) => {
-        if let Some((val, vp)) = $var {
+        if let Some((pos, (val, vp))) = $var {
           if !vp.is_empty() {
             let prefix = context.targets.prefixes(vp, Feature::$property);
-            dest.push(Property::$property(val, prefix))
+            dest.push((pos, Property::$property(val, prefix)))
           }
         }
       };
@@ -1037,32 +1062,35 @@ impl<'i> AnimationHandler<'i> {
     prop!(delays, AnimationDelay);
     prop!(fill_modes, AnimationFillMode);
 
-    if let Some(val) = timelines_value {
-      dest.push(Property::AnimationTimeline(val));
+    if let Some((pos, val)) = timelines_value {
+      dest.push((pos, Property::AnimationTimeline(val)));
     }
 
     match (range_starts, range_ends) {
-      (Some(range_starts), Some(range_ends)) => {
+      (Some((range_starts_pos, range_starts)), Some((range_ends_pos, range_ends))) => {
         if range_starts.len() == range_ends.len() {
-          dest.push(Property::AnimationRange(
-            range_starts
-              .into_iter()
-              .zip(range_ends.into_iter())
-              .map(|(start, end)| AnimationRange { start, end })
-              .collect(),
+          dest.push((
+            range_starts_pos.min(range_ends_pos),
+            Property::AnimationRange(
+              range_starts
+                .into_iter()
+                .zip(range_ends.into_iter())
+                .map(|(start, end)| AnimationRange { start, end })
+                .collect(),
+            ),
           ));
         } else {
-          dest.push(Property::AnimationRangeStart(range_starts));
-          dest.push(Property::AnimationRangeEnd(range_ends));
+          dest.push((range_starts_pos, Property::AnimationRangeStart(range_starts)));
+          dest.push((range_ends_pos, Property::AnimationRangeEnd(range_ends)));
         }
       }
       (range_starts, range_ends) => {
-        if let Some(range_starts) = range_starts {
-          dest.push(Property::AnimationRangeStart(range_starts));
+        if let Some((pos, range_starts)) = range_starts {
+          dest.push((pos, Property::AnimationRangeStart(range_starts)));
         }
 
-        if let Some(range_ends) = range_ends {
-          dest.push(Property::AnimationRangeEnd(range_ends));
+        if let Some((pos, range_ends)) = range_ends {
+          dest.push((pos, Property::AnimationRangeEnd(range_ends)));
         }
       }
     }

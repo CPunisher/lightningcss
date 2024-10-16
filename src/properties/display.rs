@@ -3,7 +3,7 @@
 use super::custom::UnparsedProperty;
 use super::{Property, PropertyId};
 use crate::context::PropertyHandlerContext;
-use crate::declaration::DeclarationList;
+use crate::declaration::{PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::macros::enum_property;
 use crate::prefixes::{is_flex_2009, Feature};
@@ -361,20 +361,21 @@ enum_property! {
 
 #[derive(Default)]
 pub(crate) struct DisplayHandler<'i> {
-  decls: Vec<Property<'i>>,
-  display: Option<Display>,
+  decls: PositionedDeclarationList<'i>,
+  display: PositionedPropertyOption<Display>,
 }
 
 impl<'i> PropertyHandler<'i> for DisplayHandler<'i> {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
+    let (pos, property) = property;
     if let Property::Display(display) = property {
       match (&self.display, display) {
-        (Some(Display::Pair(cur)), Display::Pair(new)) => {
+        (Some((position, Display::Pair(cur))), Display::Pair(new)) => {
           // If the new value is different but equivalent (e.g. different vendor prefix),
           // we need to preserve multiple values.
           if cur.outside == new.outside
@@ -388,14 +389,14 @@ impl<'i> PropertyHandler<'i> for DisplayHandler<'i> {
             if context.targets.browsers.is_some() && new.inside == DisplayInside::Flex(VendorPrefix::None) {
               self.decls.clear();
             } else if context.targets.browsers.is_none() || cur.inside != DisplayInside::Flex(VendorPrefix::None) {
-              self.decls.push(Property::Display(self.display.clone().unwrap()));
+              self.decls.push((*position, Property::Display(Display::Pair(cur.clone()))));
             }
           }
         }
         _ => {}
       }
 
-      self.display = Some(display.clone());
+      self.display = Some((pos, display.clone()));
       return true;
     }
 
@@ -407,21 +408,21 @@ impl<'i> PropertyHandler<'i> for DisplayHandler<'i> {
       })
     ) {
       self.finalize(dest, context);
-      dest.push(property.clone());
+      dest.push((pos, property.clone()));
       return true;
     }
 
     false
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     if self.display.is_none() {
       return;
     }
 
     dest.extend(self.decls.drain(..));
 
-    if let Some(display) = std::mem::take(&mut self.display) {
+    if let Some((pos, display)) = std::mem::take(&mut self.display) {
       // If we have an unprefixed `flex` value, then add the necessary prefixed values.
       if let Display::Pair(DisplayPair {
         inside: DisplayInside::Flex(VendorPrefix::None),
@@ -435,41 +436,53 @@ impl<'i> PropertyHandler<'i> for DisplayHandler<'i> {
           // Handle legacy -webkit-box/-moz-box values if needed.
           if is_flex_2009(targets) {
             if prefixes.contains(VendorPrefix::WebKit) {
-              dest.push(Property::Display(Display::Pair(DisplayPair {
-                inside: DisplayInside::Box(VendorPrefix::WebKit),
-                outside: outside.clone(),
-                is_list_item: false,
-              })));
+              dest.push((
+                pos,
+                Property::Display(Display::Pair(DisplayPair {
+                  inside: DisplayInside::Box(VendorPrefix::WebKit),
+                  outside: outside.clone(),
+                  is_list_item: false,
+                })),
+              ));
             }
 
             if prefixes.contains(VendorPrefix::Moz) {
-              dest.push(Property::Display(Display::Pair(DisplayPair {
-                inside: DisplayInside::Box(VendorPrefix::Moz),
-                outside: outside.clone(),
-                is_list_item: false,
-              })));
+              dest.push((
+                pos,
+                Property::Display(Display::Pair(DisplayPair {
+                  inside: DisplayInside::Box(VendorPrefix::Moz),
+                  outside: outside.clone(),
+                  is_list_item: false,
+                })),
+              ));
             }
           }
         }
 
         if prefixes.contains(VendorPrefix::WebKit) {
-          dest.push(Property::Display(Display::Pair(DisplayPair {
-            inside: DisplayInside::Flex(VendorPrefix::WebKit),
-            outside: outside.clone(),
-            is_list_item: false,
-          })));
+          dest.push((
+            pos,
+            Property::Display(Display::Pair(DisplayPair {
+              inside: DisplayInside::Flex(VendorPrefix::WebKit),
+              outside: outside.clone(),
+              is_list_item: false,
+            })),
+          ));
         }
 
         if prefixes.contains(VendorPrefix::Ms) {
-          dest.push(Property::Display(Display::Pair(DisplayPair {
-            inside: DisplayInside::Flex(VendorPrefix::Ms),
-            outside: outside.clone(),
-            is_list_item: false,
-          })));
+          dest.push((
+            pos,
+            Property::Display(Display::Pair(DisplayPair {
+              inside: DisplayInside::Flex(VendorPrefix::Ms),
+              outside: outside.clone(),
+              is_list_item: false,
+            })),
+          ));
         }
       }
 
-      dest.push(Property::Display(display))
+      dest.push((pos, Property::Display(display)))
     }
   }
 }

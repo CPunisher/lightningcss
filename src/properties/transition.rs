@@ -3,7 +3,7 @@
 use super::{Property, PropertyId};
 use crate::compat;
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::macros::define_list_shorthand;
 use crate::prefixes::Feature;
@@ -108,27 +108,28 @@ impl<'i> ToCss for Transition<'i> {
 
 #[derive(Default)]
 pub(crate) struct TransitionHandler<'i> {
-  properties: Option<(SmallVec<[PropertyId<'i>; 1]>, VendorPrefix)>,
-  durations: Option<(SmallVec<[Time; 1]>, VendorPrefix)>,
-  delays: Option<(SmallVec<[Time; 1]>, VendorPrefix)>,
-  timing_functions: Option<(SmallVec<[EasingFunction; 1]>, VendorPrefix)>,
+  properties: PositionedPropertyOption<(SmallVec<[PropertyId<'i>; 1]>, VendorPrefix)>,
+  durations: PositionedPropertyOption<(SmallVec<[Time; 1]>, VendorPrefix)>,
+  delays: PositionedPropertyOption<(SmallVec<[Time; 1]>, VendorPrefix)>,
+  timing_functions: PositionedPropertyOption<(SmallVec<[EasingFunction; 1]>, VendorPrefix)>,
   has_any: bool,
 }
 
 impl<'i> PropertyHandler<'i> for TransitionHandler<'i> {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
     use Property::*;
+    let (pos, property) = property;
 
     macro_rules! maybe_flush {
       ($prop: ident, $val: expr, $vp: ident) => {{
         // If two vendor prefixes for the same property have different
         // values, we need to flush what we have immediately to preserve order.
-        if let Some((val, prefixes)) = &self.$prop {
+        if let Some((_, (val, prefixes))) = &self.$prop {
           if val != $val && !prefixes.contains(*$vp) {
             self.flush(dest, context);
           }
@@ -141,13 +142,14 @@ impl<'i> PropertyHandler<'i> for TransitionHandler<'i> {
         maybe_flush!($prop, $val, $vp);
 
         // Otherwise, update the value and add the prefix.
-        if let Some((val, prefixes)) = &mut self.$prop {
+        if let Some((val_pos, (val, prefixes))) = &mut self.$prop {
+          *val_pos = pos;
           *val = $val.clone();
           *prefixes |= *$vp;
           *prefixes = context.targets.prefixes(*prefixes, Feature::$feature);
         } else {
           let prefixes = context.targets.prefixes(*$vp, Feature::$feature);
-          self.$prop = Some(($val.clone(), prefixes));
+          self.$prop = Some((pos, ($val.clone(), prefixes)));
           self.has_any = true;
         }
       }};
@@ -179,8 +181,9 @@ impl<'i> PropertyHandler<'i> for TransitionHandler<'i> {
       }
       Unparsed(val) if is_transition_property(&val.property_id) => {
         self.flush(dest, context);
-        dest.push(Property::Unparsed(
-          val.get_prefixed(context.targets, Feature::Transition),
+        dest.push((
+          pos,
+          Property::Unparsed(val.get_prefixed(context.targets, Feature::Transition)),
         ));
       }
       _ => return false,
@@ -189,13 +192,13 @@ impl<'i> PropertyHandler<'i> for TransitionHandler<'i> {
     true
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     self.flush(dest, context);
   }
 }
 
 impl<'i> TransitionHandler<'i> {
-  fn flush(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn flush(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     if !self.has_any {
       return;
     }
@@ -207,17 +210,17 @@ impl<'i> TransitionHandler<'i> {
     let mut delays = std::mem::take(&mut self.delays);
     let mut timing_functions = std::mem::take(&mut self.timing_functions);
 
-    let rtl_properties = if let Some((properties, _)) = &mut properties {
+    let rtl_properties = if let Some((_pos, (properties, _))) = &mut properties {
       expand_properties(properties, context)
     } else {
       None
     };
 
     if let (
-      Some((properties, property_prefixes)),
-      Some((durations, duration_prefixes)),
-      Some((delays, delay_prefixes)),
-      Some((timing_functions, timing_prefixes)),
+      Some((properties_pos, (properties, property_prefixes))),
+      Some((durations_pos, (durations, duration_prefixes))),
+      Some((delays_pos, (delays, delay_prefixes))),
+      Some((timing_functions_pos, (timing_functions, timing_prefixes))),
     ) = (&mut properties, &mut durations, &mut delays, &mut timing_functions)
     {
       // Find the intersection of prefixes with the same value.
@@ -256,6 +259,7 @@ impl<'i> TransitionHandler<'i> {
         }
 
         let transitions: SmallVec<[Transition; 1]> = get_transitions!(properties);
+        let transitions_pos = *properties_pos.min(durations_pos).min(delays_pos).min(timing_functions_pos);
 
         if let Some(rtl_properties) = &rtl_properties {
           let rtl_transitions = get_transitions!(rtl_properties);
@@ -264,7 +268,7 @@ impl<'i> TransitionHandler<'i> {
             Property::Transition(rtl_transitions, intersection),
           );
         } else {
-          dest.push(Property::Transition(transitions.clone(), intersection));
+          dest.push((transitions_pos, Property::Transition(transitions.clone(), intersection)));
         }
 
         property_prefixes.remove(intersection);
@@ -274,7 +278,7 @@ impl<'i> TransitionHandler<'i> {
       }
     }
 
-    if let Some((properties, prefix)) = properties {
+    if let Some((pos, (properties, prefix))) = properties {
       if !prefix.is_empty() {
         if let Some(rtl_properties) = rtl_properties {
           context.add_logical_rule(
@@ -282,26 +286,26 @@ impl<'i> TransitionHandler<'i> {
             Property::TransitionProperty(rtl_properties, prefix),
           );
         } else {
-          dest.push(Property::TransitionProperty(properties, prefix));
+          dest.push((pos, Property::TransitionProperty(properties, prefix)));
         }
       }
     }
 
-    if let Some((durations, prefix)) = durations {
+    if let Some((pos, (durations, prefix))) = durations {
       if !prefix.is_empty() {
-        dest.push(Property::TransitionDuration(durations, prefix));
+        dest.push((pos, Property::TransitionDuration(durations, prefix)));
       }
     }
 
-    if let Some((delays, prefix)) = delays {
+    if let Some((pos, (delays, prefix))) = delays {
       if !prefix.is_empty() {
-        dest.push(Property::TransitionDelay(delays, prefix));
+        dest.push((pos, Property::TransitionDelay(delays, prefix)));
       }
     }
 
-    if let Some((timing_functions, prefix)) = timing_functions {
+    if let Some((pos, (timing_functions, prefix))) = timing_functions {
       if !prefix.is_empty() {
-        dest.push(Property::TransitionTimingFunction(timing_functions, prefix));
+        dest.push((pos, Property::TransitionTimingFunction(timing_functions, prefix)));
       }
     }
 

@@ -5,7 +5,7 @@ use super::align::{
 };
 use super::{Property, PropertyId};
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::macros::*;
 use crate::prefixes::{is_flex_2009, Feature};
@@ -472,38 +472,39 @@ impl FromStandard<AlignContent> for FlexLinePack {
 
 #[derive(Default, Debug)]
 pub(crate) struct FlexHandler {
-  direction: Option<(FlexDirection, VendorPrefix)>,
-  box_orient: Option<(BoxOrient, VendorPrefix)>,
-  box_direction: Option<(BoxDirection, VendorPrefix)>,
-  wrap: Option<(FlexWrap, VendorPrefix)>,
-  box_lines: Option<(BoxLines, VendorPrefix)>,
-  grow: Option<(CSSNumber, VendorPrefix)>,
-  box_flex: Option<(CSSNumber, VendorPrefix)>,
-  flex_positive: Option<(CSSNumber, VendorPrefix)>,
-  shrink: Option<(CSSNumber, VendorPrefix)>,
-  flex_negative: Option<(CSSNumber, VendorPrefix)>,
-  basis: Option<(LengthPercentageOrAuto, VendorPrefix)>,
-  preferred_size: Option<(LengthPercentageOrAuto, VendorPrefix)>,
-  order: Option<(CSSInteger, VendorPrefix)>,
-  box_ordinal_group: Option<(BoxOrdinalGroup, VendorPrefix)>,
-  flex_order: Option<(CSSInteger, VendorPrefix)>,
+  direction: PositionedPropertyOption<(FlexDirection, VendorPrefix)>,
+  box_orient: PositionedPropertyOption<(BoxOrient, VendorPrefix)>,
+  box_direction: PositionedPropertyOption<(BoxDirection, VendorPrefix)>,
+  wrap: PositionedPropertyOption<(FlexWrap, VendorPrefix)>,
+  box_lines: PositionedPropertyOption<(BoxLines, VendorPrefix)>,
+  grow: PositionedPropertyOption<(CSSNumber, VendorPrefix)>,
+  box_flex: PositionedPropertyOption<(CSSNumber, VendorPrefix)>,
+  flex_positive: PositionedPropertyOption<(CSSNumber, VendorPrefix)>,
+  shrink: PositionedPropertyOption<(CSSNumber, VendorPrefix)>,
+  flex_negative: PositionedPropertyOption<(CSSNumber, VendorPrefix)>,
+  basis: PositionedPropertyOption<(LengthPercentageOrAuto, VendorPrefix)>,
+  preferred_size: PositionedPropertyOption<(LengthPercentageOrAuto, VendorPrefix)>,
+  order: PositionedPropertyOption<(CSSInteger, VendorPrefix)>,
+  box_ordinal_group: PositionedPropertyOption<(BoxOrdinalGroup, VendorPrefix)>,
+  flex_order: PositionedPropertyOption<(CSSInteger, VendorPrefix)>,
   has_any: bool,
 }
 
 impl<'i> PropertyHandler<'i> for FlexHandler {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
     use Property::*;
+    let (pos, property) = property;
 
     macro_rules! maybe_flush {
       ($prop: ident, $val: expr, $vp: ident) => {{
         // If two vendor prefixes for the same property have different
         // values, we need to flush what we have immediately to preserve order.
-        if let Some((val, prefixes)) = &self.$prop {
+        if let Some((_, (val, prefixes))) = &self.$prop {
           if val != $val && !prefixes.contains(*$vp) {
             self.flush(dest, context);
           }
@@ -516,11 +517,12 @@ impl<'i> PropertyHandler<'i> for FlexHandler {
         maybe_flush!($prop, $val, $vp);
 
         // Otherwise, update the value and add the prefix.
-        if let Some((val, prefixes)) = &mut self.$prop {
+        if let Some((position, (val, prefixes))) = &mut self.$prop {
+          *position = pos;
           *val = $val.clone();
           *prefixes |= *$vp;
         } else {
-          self.$prop = Some(($val.clone(), *$vp));
+          self.$prop = Some((pos, ($val.clone(), *$vp)));
           self.has_any = true;
         }
       }};
@@ -599,7 +601,7 @@ impl<'i> PropertyHandler<'i> for FlexHandler {
       FlexOrder(val, vp) => property!(flex_order, val, vp),
       Unparsed(val) if is_flex_property(&val.property_id) => {
         self.flush(dest, context);
-        dest.push(property.clone()) // TODO: prefix?
+        dest.push((pos, property.clone())) // TODO: prefix?
       }
       _ => return false,
     }
@@ -607,13 +609,13 @@ impl<'i> PropertyHandler<'i> for FlexHandler {
     true
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     self.flush(dest, context);
   }
 }
 
 impl FlexHandler {
-  fn flush<'i>(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn flush<'i>(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     if !self.has_any {
       return;
     }
@@ -638,7 +640,7 @@ impl FlexHandler {
 
     macro_rules! single_property {
       ($prop: ident, $key: ident $(, 2012: $prop_2012: ident )? $(, 2009: $prop_2009: ident )?) => {
-        if let Some((val, prefix)) = $key {
+        if let Some((pos, (val, prefix))) = $key {
           if !prefix.is_empty() {
             let mut prefix = context.targets.prefixes(prefix, Feature::$prop);
             if prefix.contains(VendorPrefix::None) {
@@ -654,7 +656,7 @@ impl FlexHandler {
                   }
                   if !prefixes_2009.is_empty() {
                     if let Some(v) = $prop_2009::from_standard(&val) {
-                      dest.push(Property::$prop_2009(v, prefixes_2009));
+                      dest.push((pos, Property::$prop_2009(v, prefixes_2009)));
                     }
                   }
                 }
@@ -664,7 +666,7 @@ impl FlexHandler {
             $(
               let mut ms = true;
               if prefix.contains(VendorPrefix::Ms) {
-                dest.push(Property::$prop_2012(val.clone(), VendorPrefix::Ms));
+                dest.push((pos, Property::$prop_2012(val.clone(), VendorPrefix::Ms)));
                 ms = false;
               }
               if !ms {
@@ -674,7 +676,7 @@ impl FlexHandler {
 
             // Firefox only implemented the 2009 spec prefixed.
             prefix.remove(VendorPrefix::Moz);
-            dest.push(Property::$prop(val, prefix))
+            dest.push((pos, Property::$prop(val, prefix)))
           }
         }
       };
@@ -682,9 +684,9 @@ impl FlexHandler {
 
     macro_rules! legacy_property {
       ($prop: ident, $key: expr) => {
-        if let Some((val, prefix)) = $key {
+        if let Some((pos, (val, prefix))) = $key {
           if !prefix.is_empty() {
-            dest.push(Property::$prop(val, prefix))
+            dest.push((pos, Property::$prop(val, prefix)))
           }
         }
       };
@@ -701,7 +703,7 @@ impl FlexHandler {
     legacy_property!(FlexPreferredSize, preferred_size.clone());
     legacy_property!(FlexOrder, flex_order.clone());
 
-    if let Some((direction, _)) = direction {
+    if let Some((pos, (direction, _))) = direction {
       if let Some(targets) = context.targets.browsers {
         let prefixes = context.targets.prefixes(VendorPrefix::None, Feature::FlexDirection);
         let mut prefixes_2009 = VendorPrefix::empty();
@@ -713,24 +715,29 @@ impl FlexHandler {
         }
         if !prefixes_2009.is_empty() {
           let (orient, dir) = direction.to_2009();
-          dest.push(Property::BoxOrient(orient, prefixes_2009));
-          dest.push(Property::BoxDirection(dir, prefixes_2009));
+          dest.push((pos, Property::BoxOrient(orient, prefixes_2009)));
+          dest.push((pos, Property::BoxDirection(dir, prefixes_2009)));
         }
       }
     }
 
-    if let (Some((direction, dir_prefix)), Some((wrap, wrap_prefix))) = (&mut direction, &mut wrap) {
+    if let (Some((direction_pos, (direction, dir_prefix))), Some((wrap_pos, (wrap, wrap_prefix)))) =
+      (&mut direction, &mut wrap)
+    {
       let intersection = *dir_prefix & *wrap_prefix;
       if !intersection.is_empty() {
         let mut prefix = context.targets.prefixes(intersection, Feature::FlexFlow);
         // Firefox only implemented the 2009 spec prefixed.
         prefix.remove(VendorPrefix::Moz);
-        dest.push(Property::FlexFlow(
-          FlexFlow {
-            direction: *direction,
-            wrap: *wrap,
-          },
-          prefix,
+        dest.push((
+          *direction_pos.min(wrap_pos),
+          Property::FlexFlow(
+            FlexFlow {
+              direction: *direction,
+              wrap: *wrap,
+            },
+            prefix,
+          ),
         ));
         dir_prefix.remove(intersection);
         wrap_prefix.remove(intersection);
@@ -741,7 +748,7 @@ impl FlexHandler {
     single_property!(FlexWrap, wrap, 2009: BoxLines);
 
     if let Some(targets) = context.targets.browsers {
-      if let Some((grow, _)) = grow {
+      if let Some((pos, (grow, _))) = grow {
         let prefixes = context.targets.prefixes(VendorPrefix::None, Feature::FlexGrow);
         let mut prefixes_2009 = VendorPrefix::empty();
         if is_flex_2009(targets) {
@@ -751,26 +758,32 @@ impl FlexHandler {
           prefixes_2009 |= VendorPrefix::Moz;
         }
         if !prefixes_2009.is_empty() {
-          dest.push(Property::BoxFlex(grow, prefixes_2009));
+          dest.push((pos, Property::BoxFlex(grow, prefixes_2009)));
         }
       }
     }
 
-    if let (Some((grow, grow_prefix)), Some((shrink, shrink_prefix)), Some((basis, basis_prefix))) =
-      (&mut grow, &mut shrink, &mut basis)
+    if let (
+      Some((grow_pos, (grow, grow_prefix))),
+      Some((shrink_pos, (shrink, shrink_prefix))),
+      Some((basis_pos, (basis, basis_prefix))),
+    ) = (&mut grow, &mut shrink, &mut basis)
     {
       let intersection = *grow_prefix & *shrink_prefix & *basis_prefix;
       if !intersection.is_empty() {
         let mut prefix = context.targets.prefixes(intersection, Feature::Flex);
         // Firefox only implemented the 2009 spec prefixed.
         prefix.remove(VendorPrefix::Moz);
-        dest.push(Property::Flex(
-          Flex {
-            grow: *grow,
-            shrink: *shrink,
-            basis: basis.clone(),
-          },
-          prefix,
+        dest.push((
+          *grow_pos.min(shrink_pos).min(basis_pos),
+          Property::Flex(
+            Flex {
+              grow: *grow,
+              shrink: *shrink,
+              basis: basis.clone(),
+            },
+            prefix,
+          ),
         ));
         grow_prefix.remove(intersection);
         shrink_prefix.remove(intersection);

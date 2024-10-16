@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 use crate::visitor::Visit;
 use crate::{
   context::PropertyHandlerContext,
-  declaration::{DeclarationBlock, DeclarationList},
+  declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption},
   error::{ParserError, PrinterError},
   macros::{define_shorthand, enum_property, shorthand_handler},
   printer::Printer,

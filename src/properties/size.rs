@@ -2,7 +2,7 @@
 
 use crate::compat::Feature;
 use crate::context::PropertyHandlerContext;
-use crate::declaration::DeclarationList;
+use crate::declaration::{PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::logical::PropertyCategory;
 use crate::macros::{enum_property, property_bitflags};
@@ -378,18 +378,18 @@ property_bitflags! {
 
 #[derive(Default)]
 pub(crate) struct SizeHandler {
-  width: Option<Size>,
-  height: Option<Size>,
-  min_width: Option<Size>,
-  min_height: Option<Size>,
-  max_width: Option<MaxSize>,
-  max_height: Option<MaxSize>,
-  block_size: Option<Size>,
-  inline_size: Option<Size>,
-  min_block_size: Option<Size>,
-  min_inline_size: Option<Size>,
-  max_block_size: Option<MaxSize>,
-  max_inline_size: Option<MaxSize>,
+  width: PositionedPropertyOption<Size>,
+  height: PositionedPropertyOption<Size>,
+  min_width: PositionedPropertyOption<Size>,
+  min_height: PositionedPropertyOption<Size>,
+  max_width: PositionedPropertyOption<MaxSize>,
+  max_height: PositionedPropertyOption<MaxSize>,
+  block_size: PositionedPropertyOption<Size>,
+  inline_size: PositionedPropertyOption<Size>,
+  min_block_size: PositionedPropertyOption<Size>,
+  min_inline_size: PositionedPropertyOption<Size>,
+  max_block_size: PositionedPropertyOption<MaxSize>,
+  max_inline_size: PositionedPropertyOption<MaxSize>,
   has_any: bool,
   flushed_properties: SizeProperty,
   category: PropertyCategory,
@@ -398,10 +398,11 @@ pub(crate) struct SizeHandler {
 impl<'i> PropertyHandler<'i> for SizeHandler {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
+    let (pos, property) = property;
     let logical_supported = !context.should_compile_logical(Feature::LogicalSize);
 
     macro_rules! property {
@@ -413,7 +414,7 @@ impl<'i> PropertyHandler<'i> for SizeHandler {
           self.flush(dest, context);
         }
 
-        self.$prop = Some($val.clone());
+        self.$prop = Some((pos, $val.clone()));
         self.category = PropertyCategory::$category;
         self.has_any = true;
       }};
@@ -439,10 +440,11 @@ impl<'i> PropertyHandler<'i> for SizeHandler {
               self
                 .flushed_properties
                 .insert(SizeProperty::try_from(&unparsed.property_id).unwrap());
-              dest.push(property.clone());
+              dest.push((pos, property.clone()));
             } else {
-              dest.push(Property::Unparsed(
-                unparsed.with_property_id(PropertyId::$physical),
+              dest.push((
+                pos,
+                Property::Unparsed(unparsed.with_property_id(PropertyId::$physical)),
               ));
               self.flushed_properties.insert(SizeProperty::$physical);
             }
@@ -459,7 +461,7 @@ impl<'i> PropertyHandler<'i> for SizeHandler {
             self
               .flushed_properties
               .insert(SizeProperty::try_from(&unparsed.property_id).unwrap());
-            dest.push(property.clone());
+            dest.push((pos, property.clone()));
           }
           PropertyId::BlockSize => logical_unparsed!(Height),
           PropertyId::MinBlockSize => logical_unparsed!(MinHeight),
@@ -476,14 +478,14 @@ impl<'i> PropertyHandler<'i> for SizeHandler {
     true
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList, context: &mut PropertyHandlerContext<'i, '_>) {
     self.flush(dest, context);
     self.flushed_properties = SizeProperty::empty();
   }
 }
 
 impl SizeHandler {
-  fn flush<'i>(&mut self, dest: &mut DeclarationList, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn flush<'i>(&mut self, dest: &mut PositionedDeclarationList, context: &mut PropertyHandlerContext<'i, '_>) {
     if !self.has_any {
       return;
     }
@@ -492,12 +494,12 @@ impl SizeHandler {
     let logical_supported = !context.should_compile_logical(Feature::LogicalSize);
 
     macro_rules! prefix {
-      ($prop: ident, $size: ident, $feature: ident) => {
+      ($prop: ident, $size: ident, $feature: ident, $pos: ident) => {
         if !self.flushed_properties.contains(SizeProperty::$prop) {
           let prefixes =
             context.targets.prefixes(VendorPrefix::None, crate::prefixes::Feature::$feature) - VendorPrefix::None;
           for prefix in prefixes {
-            dest.push(Property::$prop($size::$feature(prefix)));
+            dest.push(($pos, Property::$prop($size::$feature(prefix))));
           }
         }
       };
@@ -505,15 +507,15 @@ impl SizeHandler {
 
     macro_rules! property {
       ($prop: ident, $val: ident, $size: ident) => {{
-        if let Some(val) = std::mem::take(&mut self.$val) {
+        if let Some((pos, val)) = std::mem::take(&mut self.$val) {
           match val {
-            $size::Stretch(VendorPrefix::None) => prefix!($prop, $size, Stretch),
-            $size::MinContent(VendorPrefix::None) => prefix!($prop, $size, MinContent),
-            $size::MaxContent(VendorPrefix::None) => prefix!($prop, $size, MaxContent),
-            $size::FitContent(VendorPrefix::None) => prefix!($prop, $size, FitContent),
+            $size::Stretch(VendorPrefix::None) => prefix!($prop, $size, Stretch, pos),
+            $size::MinContent(VendorPrefix::None) => prefix!($prop, $size, MinContent, pos),
+            $size::MaxContent(VendorPrefix::None) => prefix!($prop, $size, MaxContent, pos),
+            $size::FitContent(VendorPrefix::None) => prefix!($prop, $size, FitContent, pos),
             _ => {}
           }
-          dest.push(Property::$prop(val.clone()));
+          dest.push((pos, Property::$prop(val.clone())));
           self.flushed_properties.insert(SizeProperty::$prop);
         }
       }};

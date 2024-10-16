@@ -2,7 +2,7 @@
 
 use super::Property;
 use crate::context::PropertyHandlerContext;
-use crate::declaration::DeclarationList;
+use crate::declaration::{PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::prefixes::Feature;
 use crate::printer::Printer;
@@ -91,21 +91,24 @@ pub enum ZIndex {
 
 #[derive(Default)]
 pub(crate) struct PositionHandler {
-  position: Option<Position>,
+  position: PositionedPropertyOption<Position>,
 }
 
 impl<'i> PropertyHandler<'i> for PositionHandler {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    _: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    _: &mut PositionedDeclarationList<'i>,
     _: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
+    let (pos, property) = property;
     if let Property::Position(position) = property {
-      if let (Some(Position::Sticky(cur)), Position::Sticky(new)) = (&mut self.position, position) {
+      if let (Some((position_pos, Position::Sticky(cur))), Position::Sticky(new)) = (&mut self.position, position)
+      {
+        *position_pos = pos;
         *cur |= *new;
       } else {
-        self.position = Some(position.clone());
+        self.position = Some((pos, position.clone()));
       }
 
       return true;
@@ -114,24 +117,24 @@ impl<'i> PropertyHandler<'i> for PositionHandler {
     false
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList, context: &mut PropertyHandlerContext<'i, '_>) {
     if self.position.is_none() {
       return;
     }
 
-    if let Some(position) = std::mem::take(&mut self.position) {
+    if let Some((pos, position)) = std::mem::take(&mut self.position) {
       match position {
         Position::Sticky(mut prefix) => {
           prefix = context.targets.prefixes(prefix, Feature::Sticky);
           if prefix.contains(VendorPrefix::WebKit) {
-            dest.push(Property::Position(Position::Sticky(VendorPrefix::WebKit)))
+            dest.push((pos, Property::Position(Position::Sticky(VendorPrefix::WebKit))))
           }
 
           if prefix.contains(VendorPrefix::None) {
-            dest.push(Property::Position(Position::Sticky(VendorPrefix::None)))
+            dest.push((pos, Property::Position(Position::Sticky(VendorPrefix::None))))
           }
         }
-        _ => dest.push(Property::Position(position)),
+        _ => dest.push((pos, Property::Position(position))),
       }
     }
   }

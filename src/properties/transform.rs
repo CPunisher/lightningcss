@@ -2,7 +2,7 @@
 
 use super::{Property, PropertyId};
 use crate::context::PropertyHandlerContext;
-use crate::declaration::DeclarationList;
+use crate::declaration::{PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::macros::enum_property;
 use crate::prefixes::Feature;
@@ -1693,28 +1693,30 @@ impl Scale {
 
 #[derive(Default)]
 pub(crate) struct TransformHandler {
-  transform: Option<(TransformList, VendorPrefix)>,
-  translate: Option<Translate>,
-  rotate: Option<Rotate>,
-  scale: Option<Scale>,
+  transform: PositionedPropertyOption<(TransformList, VendorPrefix)>,
+  translate: PositionedPropertyOption<Translate>,
+  rotate: PositionedPropertyOption<Rotate>,
+  scale: PositionedPropertyOption<Scale>,
   has_any: bool,
 }
 
 impl<'i> PropertyHandler<'i> for TransformHandler {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
     use Property::*;
+    let (pos, property) = property;
 
     macro_rules! individual_property {
       ($prop: ident, $val: ident) => {
-        if let Some((transform, _)) = &mut self.transform {
+        if let Some((val_pos, (transform, _))) = &mut self.transform {
+          *val_pos = pos;
           transform.0.push($val.to_transform())
         } else {
-          self.$prop = Some($val.clone());
+          self.$prop = Some((pos, $val.clone()));
           self.has_any = true;
         }
       };
@@ -1724,18 +1726,19 @@ impl<'i> PropertyHandler<'i> for TransformHandler {
       Transform(val, vp) => {
         // If two vendor prefixes for the same property have different
         // values, we need to flush what we have immediately to preserve order.
-        if let Some((cur, prefixes)) = &self.transform {
+        if let Some((_, (cur, prefixes))) = &self.transform {
           if cur != val && !prefixes.contains(*vp) {
             self.flush(dest, context);
           }
         }
 
         // Otherwise, update the value and add the prefix.
-        if let Some((transform, prefixes)) = &mut self.transform {
+        if let Some((val_pos, (transform, prefixes))) = &mut self.transform {
+          *val_pos = pos;
           *transform = val.clone();
           *prefixes |= *vp;
         } else {
-          self.transform = Some((val.clone(), *vp));
+          self.transform = Some((pos, (val.clone(), *vp)));
           self.has_any = true;
         }
 
@@ -1758,7 +1761,7 @@ impl<'i> PropertyHandler<'i> for TransformHandler {
         } else {
           property.clone()
         };
-        dest.push(prop)
+        dest.push((pos, prop))
       }
       _ => return false,
     }
@@ -1766,13 +1769,13 @@ impl<'i> PropertyHandler<'i> for TransformHandler {
     true
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     self.flush(dest, context);
   }
 }
 
 impl TransformHandler {
-  fn flush<'i>(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn flush<'i>(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     if !self.has_any {
       return;
     }
@@ -1784,21 +1787,21 @@ impl TransformHandler {
     let rotate = std::mem::take(&mut self.rotate);
     let scale = std::mem::take(&mut self.scale);
 
-    if let Some((transform, prefix)) = transform {
+    if let Some((pos, (transform, prefix))) = transform {
       let prefix = context.targets.prefixes(prefix, Feature::Transform);
-      dest.push(Property::Transform(transform, prefix))
+      dest.push((pos, Property::Transform(transform, prefix)))
     }
 
-    if let Some(translate) = translate {
-      dest.push(Property::Translate(translate))
+    if let Some((pos, translate)) = translate {
+      dest.push((pos, Property::Translate(translate)))
     }
 
-    if let Some(rotate) = rotate {
-      dest.push(Property::Rotate(rotate))
+    if let Some((pos, rotate)) = rotate {
+      dest.push((pos, Property::Rotate(rotate)))
     }
 
-    if let Some(scale) = scale {
-      dest.push(Property::Scale(scale))
+    if let Some((pos, scale)) = scale {
+      dest.push((pos, Property::Scale(scale)))
     }
   }
 }

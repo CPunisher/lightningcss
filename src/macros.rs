@@ -214,15 +214,16 @@ macro_rules! shorthand_handler {
     #[derive(Default)]
     pub(crate) struct $name$(<$l>)? {
       $(
-        pub $key: Option<$type>,
+        pub $key: PositionedPropertyOption<$type>,
       )*
       flushed_properties: paste::paste!([<$shorthand Property>]),
       has_any: bool
     }
 
     impl<'i> PropertyHandler<'i> for $name$(<$l>)? {
-      fn handle_property(&mut self, property: &Property<'i>, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) -> bool {
+      fn handle_property(&mut self, property: (usize, &Property<'i>), dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) -> bool {
         use crate::traits::IsCompatible;
+        let (pos, property) = property;
 
         match property {
           $(
@@ -230,7 +231,7 @@ macro_rules! shorthand_handler {
               if self.$key.is_some() && matches!(context.targets.browsers, Some(targets) if !val.is_compatible(targets)) {
                 self.flush(dest, context);
               }
-              self.$key = Some(val.clone());
+              self.$key = Some((pos, val.clone()));
               self.has_any = true;
             },
           )+
@@ -241,7 +242,7 @@ macro_rules! shorthand_handler {
               }
             )+
             $(
-              self.$key = Some(val.$key.clone());
+              self.$key = Some((pos, val.$key.clone()));
             )+
             self.has_any = true;
           }
@@ -253,7 +254,7 @@ macro_rules! shorthand_handler {
             paste::paste! {
               self.flushed_properties.insert([<$shorthand Property>]::try_from(&unparsed.property_id).unwrap());
             };
-            dest.push(Property::Unparsed(unparsed));
+            dest.push((pos, Property::Unparsed(unparsed)));
           }
           _ => return false
         }
@@ -261,7 +262,7 @@ macro_rules! shorthand_handler {
         true
       }
 
-      fn finalize(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+      fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
         self.flush(dest, context);
         self.flushed_properties = paste::paste!([<$shorthand Property>]::empty());
       }
@@ -269,7 +270,7 @@ macro_rules! shorthand_handler {
 
     impl<'i> $name$(<$l>)? {
       #[allow(unused_variables)]
-      fn flush(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+      fn flush(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
         if !self.has_any {
           return
         }
@@ -281,40 +282,48 @@ macro_rules! shorthand_handler {
         )+
 
         if $( $key.is_some() && )* true {
+          paste::paste! {
+            $( let ([<$key _pos>], $key) = $key.unwrap(); )*
+          }
+
           #[allow(unused_mut)]
           let mut shorthand = $shorthand {
             $(
-              $key: $key.unwrap(),
+              $key,
             )+
+          };
+
+          let pos = paste::paste! {
+            usize::MAX$( .min([<$key _pos>]) )*
           };
 
           $(
             if $shorthand_fallback && !self.flushed_properties.intersects(paste::paste!([<$shorthand Property>]::$shorthand)) {
               let fallbacks = shorthand.get_fallbacks(context.targets);
               for fallback in fallbacks {
-                dest.push(Property::$shorthand(fallback));
+                dest.push((pos, Property::$shorthand(fallback)));
               }
             }
           )?
 
-          dest.push(Property::$shorthand(shorthand));
+          dest.push((pos, Property::$shorthand(shorthand)));
           paste::paste! {
             self.flushed_properties.insert([<$shorthand Property>]::$shorthand);
           };
         } else {
           $(
             #[allow(unused_mut)]
-            if let Some(mut val) = $key {
+            if let Some((pos, mut val)) = $key {
               $(
                 if $fallback && !self.flushed_properties.intersects(paste::paste!([<$shorthand Property>]::$prop)) {
                   let fallbacks = val.get_fallbacks(context.targets);
                   for fallback in fallbacks {
-                    dest.push(Property::$prop(fallback));
+                    dest.push((pos, Property::$prop(fallback)));
                   }
                 }
               )?
 
-              dest.push(Property::$prop(val));
+              dest.push((pos, Property::$prop(val)));
               paste::paste! {
                 self.flushed_properties.insert([<$shorthand Property>]::$prop);
               };

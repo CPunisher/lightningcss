@@ -4,7 +4,7 @@ use super::flex::{BoxAlign, BoxPack, FlexAlign, FlexItemAlign, FlexLinePack, Fle
 use super::{Property, PropertyId};
 use crate::compat;
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::macros::*;
 use crate::prefixes::{is_flex_2009, Feature};
@@ -847,37 +847,39 @@ impl ToCss for Gap {
 
 #[derive(Default, Debug)]
 pub(crate) struct AlignHandler {
-  align_content: Option<(AlignContent, VendorPrefix)>,
-  flex_line_pack: Option<(FlexLinePack, VendorPrefix)>,
-  justify_content: Option<(JustifyContent, VendorPrefix)>,
-  box_pack: Option<(BoxPack, VendorPrefix)>,
-  flex_pack: Option<(FlexPack, VendorPrefix)>,
-  align_self: Option<(AlignSelf, VendorPrefix)>,
-  flex_item_align: Option<(FlexItemAlign, VendorPrefix)>,
-  justify_self: Option<JustifySelf>,
-  align_items: Option<(AlignItems, VendorPrefix)>,
-  box_align: Option<(BoxAlign, VendorPrefix)>,
-  flex_align: Option<(FlexAlign, VendorPrefix)>,
-  justify_items: Option<JustifyItems>,
-  row_gap: Option<GapValue>,
-  column_gap: Option<GapValue>,
+  align_content: PositionedPropertyOption<(AlignContent, VendorPrefix)>,
+  flex_line_pack: PositionedPropertyOption<(FlexLinePack, VendorPrefix)>,
+  justify_content: PositionedPropertyOption<(JustifyContent, VendorPrefix)>,
+  box_pack: PositionedPropertyOption<(BoxPack, VendorPrefix)>,
+  flex_pack: PositionedPropertyOption<(FlexPack, VendorPrefix)>,
+  align_self: PositionedPropertyOption<(AlignSelf, VendorPrefix)>,
+  flex_item_align: PositionedPropertyOption<(FlexItemAlign, VendorPrefix)>,
+  justify_self: PositionedPropertyOption<JustifySelf>,
+  align_items: PositionedPropertyOption<(AlignItems, VendorPrefix)>,
+  box_align: PositionedPropertyOption<(BoxAlign, VendorPrefix)>,
+  flex_align: PositionedPropertyOption<(FlexAlign, VendorPrefix)>,
+  justify_items: PositionedPropertyOption<JustifyItems>,
+  row_gap: PositionedPropertyOption<GapValue>,
+  column_gap: PositionedPropertyOption<GapValue>,
   has_any: bool,
 }
 
 impl<'i> PropertyHandler<'i> for AlignHandler {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
     use Property::*;
+
+    let (pos, property) = property;
 
     macro_rules! maybe_flush {
       ($prop: ident, $val: expr, $vp: expr) => {{
         // If two vendor prefixes for the same property have different
         // values, we need to flush what we have immediately to preserve order.
-        if let Some((val, prefixes)) = &self.$prop {
+        if let Some((_, (val, prefixes))) = &self.$prop {
           if val != $val && !prefixes.contains(*$vp) {
             self.flush(dest, context);
           }
@@ -890,11 +892,12 @@ impl<'i> PropertyHandler<'i> for AlignHandler {
         maybe_flush!($prop, $val, $vp);
 
         // Otherwise, update the value and add the prefix.
-        if let Some((val, prefixes)) = &mut self.$prop {
+        if let Some((position, (val, prefixes))) = &mut self.$prop {
+          *position = pos;
           *val = $val.clone();
           *prefixes |= *$vp;
         } else {
-          self.$prop = Some(($val.clone(), *$vp));
+          self.$prop = Some((pos, ($val.clone(), *$vp)));
           self.has_any = true;
         }
       }};
@@ -928,13 +931,13 @@ impl<'i> PropertyHandler<'i> for AlignHandler {
       }
       FlexItemAlign(val, vp) => property!(flex_item_align, val, vp),
       JustifySelf(val) => {
-        self.justify_self = Some(val.clone());
+        self.justify_self = Some((pos, val.clone()));
         self.has_any = true;
       }
       PlaceSelf(val) => {
         self.flex_item_align = None;
         property!(align_self, &val.align, &VendorPrefix::None);
-        self.justify_self = Some(val.justify.clone());
+        self.justify_self = Some((pos, val.justify.clone()));
       }
       AlignItems(val, vp) => {
         self.box_align = None;
@@ -944,31 +947,31 @@ impl<'i> PropertyHandler<'i> for AlignHandler {
       BoxAlign(val, vp) => property!(box_align, val, vp),
       FlexAlign(val, vp) => property!(flex_align, val, vp),
       JustifyItems(val) => {
-        self.justify_items = Some(val.clone());
+        self.justify_items = Some((pos, val.clone()));
         self.has_any = true;
       }
       PlaceItems(val) => {
         self.box_align = None;
         self.flex_align = None;
         property!(align_items, &val.align, &VendorPrefix::None);
-        self.justify_items = Some(val.justify.clone());
+        self.justify_items = Some((pos, val.justify.clone()));
       }
       RowGap(val) => {
-        self.row_gap = Some(val.clone());
+        self.row_gap = Some((pos, val.clone()));
         self.has_any = true;
       }
       ColumnGap(val) => {
-        self.column_gap = Some(val.clone());
+        self.column_gap = Some((pos, val.clone()));
         self.has_any = true;
       }
       Gap(val) => {
-        self.row_gap = Some(val.row.clone());
-        self.column_gap = Some(val.column.clone());
+        self.row_gap = Some((pos, val.row.clone()));
+        self.column_gap = Some((pos, val.column.clone()));
         self.has_any = true;
       }
       Unparsed(val) if is_align_property(&val.property_id) => {
         self.flush(dest, context);
-        dest.push(property.clone()) // TODO: prefix?
+        dest.push((pos, property.clone())) // TODO: prefix?
       }
       _ => return false,
     }
@@ -976,13 +979,13 @@ impl<'i> PropertyHandler<'i> for AlignHandler {
     true
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     self.flush(dest, context);
   }
 }
 
 impl AlignHandler {
-  fn flush<'i>(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn flush<'i>(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     if !self.has_any {
       return;
     }
@@ -1017,21 +1020,21 @@ impl AlignHandler {
 
     macro_rules! standard_property {
       ($prop: ident, $key: ident) => {
-        if let Some((val, prefix)) = $key {
+        if let Some((pos, (val, prefix))) = $key {
           // If we have an unprefixed property, override necessary prefixes.
           let prefix = if prefix.contains(VendorPrefix::None) {
             prefixes!($prop)
           } else {
             prefix
           };
-          dest.push(Property::$prop(val, prefix))
+          dest.push((pos, Property::$prop(val, prefix)))
         }
       };
     }
 
     macro_rules! legacy_property {
       ($prop: ident, $key: ident, $( $prop_2009: ident )?, $prop_2012: ident) => {
-        if let Some((val, prefix)) = &$key {
+        if let Some((pos, (val, prefix))) = &$key {
           // If we have an unprefixed standard property, generate legacy prefixed versions.
           let mut prefix = context.targets.prefixes(*prefix, Feature::$prop);
 
@@ -1048,7 +1051,7 @@ impl AlignHandler {
                 }
                 if !prefixes_2009.is_empty() {
                   if let Some(v) = $prop_2009::from_standard(&val) {
-                    dest.push(Property::$prop_2009(v, prefixes_2009));
+                    dest.push((*pos, Property::$prop_2009(v, prefixes_2009)));
                   }
                 }
               }
@@ -1058,7 +1061,7 @@ impl AlignHandler {
           // 2012 spec, implemented by microsoft.
           if prefix.contains(VendorPrefix::Ms) {
             if let Some(v) = $prop_2012::from_standard(&val) {
-              dest.push(Property::$prop_2012(v, VendorPrefix::Ms));
+              dest.push((*pos, Property::$prop_2012(v, VendorPrefix::Ms)));
             }
           }
 
@@ -1070,23 +1073,23 @@ impl AlignHandler {
 
     macro_rules! prefixed_property {
       ($prop: ident, $key: expr) => {
-        if let Some((val, prefix)) = $key {
-          dest.push(Property::$prop(val, prefix))
+        if let Some((pos, (val, prefix))) = $key {
+          dest.push((pos, Property::$prop(val, prefix)))
         }
       };
     }
 
     macro_rules! unprefixed_property {
       ($prop: ident, $key: expr) => {
-        if let Some(val) = $key {
-          dest.push(Property::$prop(val))
+        if let Some((pos, val)) = $key {
+          dest.push((pos, Property::$prop(val)))
         }
       };
     }
 
     macro_rules! shorthand {
       ($prop: ident, $align_prop: ident, $align: ident, $justify: ident $(, $justify_prop: ident )?) => {
-        if let (Some((align, align_prefix)), Some(justify)) = (&mut $align, &mut $justify) {
+        if let (Some((align_pos,(align, align_prefix))), Some((justify_pos, justify))) = (&mut $align, &mut $justify) {
           let intersection = *align_prefix $( & {
             // Hack for conditional compilation. Have to use a variable.
             #[allow(non_snake_case)]
@@ -1100,7 +1103,7 @@ impl AlignHandler {
             *align_prefix = prefixes!($align_prop);
             align_prefix.remove(VendorPrefix::None);
             if !align_prefix.is_empty() {
-              dest.push(Property::$align_prop(align.clone(), *align_prefix))
+              dest.push((*align_pos, Property::$align_prop(align.clone(), *align_prefix)))
             }
 
             $(
@@ -1109,15 +1112,15 @@ impl AlignHandler {
               justify_prefix.remove(VendorPrefix::None);
 
               if !justify_prefix.is_empty() {
-                dest.push(Property::$justify_prop(justify.clone(), *justify_prefix))
+                dest.push((*justify_pos, Property::$justify_prop(justify.clone(), *justify_prefix)))
               }
             )?
 
             // Add shorthand.
-            dest.push(Property::$prop($prop {
+            dest.push((*align_pos.min(justify_pos), Property::$prop($prop {
               align: align.clone(),
               justify: justify.clone()
-            }));
+            })));
 
             $align = None;
             $justify = None;
@@ -1165,17 +1168,22 @@ impl AlignHandler {
     unprefixed_property!(JustifyItems, justify_items);
 
     if row_gap.is_some() && column_gap.is_some() {
-      dest.push(Property::Gap(Gap {
-        row: row_gap.unwrap(),
-        column: column_gap.unwrap(),
-      }))
+      let (row_gap_pos, row_gap) = row_gap.unwrap();
+      let (column_gap_pos, column_gap) = column_gap.unwrap();
+      dest.push((
+        row_gap_pos.max(column_gap_pos),
+        Property::Gap(Gap {
+          row: row_gap,
+          column: column_gap,
+        }),
+      ))
     } else {
-      if let Some(gap) = row_gap {
-        dest.push(Property::RowGap(gap))
+      if let Some((gap_pos, gap)) = row_gap {
+        dest.push((gap_pos, Property::RowGap(gap)))
       }
 
-      if let Some(gap) = column_gap {
-        dest.push(Property::ColumnGap(gap))
+      if let Some((gap_pos, gap)) = column_gap {
+        dest.push((gap_pos, Property::ColumnGap(gap)))
       }
     }
   }

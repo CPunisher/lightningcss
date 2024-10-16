@@ -2,7 +2,7 @@
 
 use crate::compat;
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::logical::PropertyCategory;
 use crate::macros::define_shorthand;
@@ -91,14 +91,14 @@ impl ToCss for BorderRadius {
 
 #[derive(Default, Debug)]
 pub(crate) struct BorderRadiusHandler<'i> {
-  top_left: Option<(Size2D<LengthPercentage>, VendorPrefix)>,
-  top_right: Option<(Size2D<LengthPercentage>, VendorPrefix)>,
-  bottom_right: Option<(Size2D<LengthPercentage>, VendorPrefix)>,
-  bottom_left: Option<(Size2D<LengthPercentage>, VendorPrefix)>,
-  start_start: Option<Property<'i>>,
-  start_end: Option<Property<'i>>,
-  end_end: Option<Property<'i>>,
-  end_start: Option<Property<'i>>,
+  top_left: PositionedPropertyOption<(Size2D<LengthPercentage>, VendorPrefix)>,
+  top_right: PositionedPropertyOption<(Size2D<LengthPercentage>, VendorPrefix)>,
+  bottom_right: PositionedPropertyOption<(Size2D<LengthPercentage>, VendorPrefix)>,
+  bottom_left: PositionedPropertyOption<(Size2D<LengthPercentage>, VendorPrefix)>,
+  start_start: PositionedPropertyOption<Property<'i>>,
+  start_end: PositionedPropertyOption<Property<'i>>,
+  end_end: PositionedPropertyOption<Property<'i>>,
+  end_start: PositionedPropertyOption<Property<'i>>,
   category: PropertyCategory,
   has_any: bool,
 }
@@ -106,17 +106,18 @@ pub(crate) struct BorderRadiusHandler<'i> {
 impl<'i> PropertyHandler<'i> for BorderRadiusHandler<'i> {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
     use Property::*;
+    let (pos, property) = property;
 
     macro_rules! maybe_flush {
       ($prop: ident, $val: expr, $vp: expr) => {{
         // If two vendor prefixes for the same property have different
         // values, we need to flush what we have immediately to preserve order.
-        if let Some((val, prefixes)) = &self.$prop {
+        if let Some((_, (val, prefixes))) = &self.$prop {
           if val != $val && !prefixes.contains(*$vp) {
             self.flush(dest, context);
           }
@@ -137,11 +138,12 @@ impl<'i> PropertyHandler<'i> for BorderRadiusHandler<'i> {
         maybe_flush!($prop, $val, $vp);
 
         // Otherwise, update the value and add the prefix.
-        if let Some((val, prefixes)) = &mut self.$prop {
+        if let Some((position, (val, prefixes))) = &mut self.$prop {
+          *position = pos;
           *val = $val.clone();
           *prefixes |= *$vp;
         } else {
-          self.$prop = Some(($val.clone(), *$vp));
+          self.$prop = Some((pos, ($val.clone(), *$vp)));
           self.has_any = true;
         }
 
@@ -155,7 +157,7 @@ impl<'i> PropertyHandler<'i> for BorderRadiusHandler<'i> {
           self.flush(dest, context);
         }
 
-        self.$prop = Some(property.clone());
+        self.$prop = Some((pos, property.clone()));
         self.category = PropertyCategory::Logical;
         self.has_any = true;
       }};
@@ -194,8 +196,9 @@ impl<'i> PropertyHandler<'i> for BorderRadiusHandler<'i> {
           PropertyId::BorderEndStartRadius => logical_property!(end_start),
           _ => {
             self.flush(dest, context);
-            dest.push(Property::Unparsed(
-              val.get_prefixed(context.targets, Feature::BorderRadius),
+            dest.push((
+              pos,
+              Property::Unparsed(val.get_prefixed(context.targets, Feature::BorderRadius)),
             ));
           }
         }
@@ -206,13 +209,13 @@ impl<'i> PropertyHandler<'i> for BorderRadiusHandler<'i> {
     true
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     self.flush(dest, context);
   }
 }
 
 impl<'i> BorderRadiusHandler<'i> {
-  fn flush(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn flush(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     if !self.has_any {
       return;
     }
@@ -229,23 +232,26 @@ impl<'i> BorderRadiusHandler<'i> {
     let end_start = std::mem::take(&mut self.end_start);
 
     if let (
-      Some((top_left, tl_prefix)),
-      Some((top_right, tr_prefix)),
-      Some((bottom_right, br_prefix)),
-      Some((bottom_left, bl_prefix)),
+      Some((top_left_pos, (top_left, tl_prefix))),
+      Some((top_right_pos, (top_right, tr_prefix))),
+      Some((bottom_right_pos, (bottom_right, br_prefix))),
+      Some((bottom_left_pos, (bottom_left, bl_prefix))),
     ) = (&mut top_left, &mut top_right, &mut bottom_right, &mut bottom_left)
     {
       let intersection = *tl_prefix & *tr_prefix & *br_prefix & *bl_prefix;
       if !intersection.is_empty() {
         let prefix = context.targets.prefixes(intersection, Feature::BorderRadius);
-        dest.push(Property::BorderRadius(
-          BorderRadius {
-            top_left: top_left.clone(),
-            top_right: top_right.clone(),
-            bottom_right: bottom_right.clone(),
-            bottom_left: bottom_left.clone(),
-          },
-          prefix,
+        dest.push((
+          *top_left_pos.min(top_right_pos).min(bottom_right_pos).min(bottom_left_pos),
+          Property::BorderRadius(
+            BorderRadius {
+              top_left: top_left.clone(),
+              top_right: top_right.clone(),
+              bottom_right: bottom_right.clone(),
+              bottom_left: bottom_left.clone(),
+            },
+            prefix,
+          ),
         ));
         tl_prefix.remove(intersection);
         tr_prefix.remove(intersection);
@@ -256,10 +262,10 @@ impl<'i> BorderRadiusHandler<'i> {
 
     macro_rules! single_property {
       ($prop: ident, $key: ident) => {
-        if let Some((val, mut vp)) = $key {
+        if let Some((pos, (val, mut vp))) = $key {
           if !vp.is_empty() {
             vp = context.targets.prefixes(vp, Feature::$prop);
-            dest.push(Property::$prop(val, vp))
+            dest.push((pos, Property::$prop(val, vp)))
           }
         }
       };
@@ -269,9 +275,9 @@ impl<'i> BorderRadiusHandler<'i> {
 
     macro_rules! logical_property {
       ($prop: ident, $key: ident, $ltr: ident, $rtl: ident) => {
-        if let Some(val) = $key {
+        if let Some((pos, val)) = $key {
           if logical_supported {
-            dest.push(val);
+            dest.push((pos, val));
           } else {
             let vp = context.targets.prefixes(VendorPrefix::None, Feature::$ltr);
             match val {

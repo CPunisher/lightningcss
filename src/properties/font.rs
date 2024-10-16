@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use super::{Property, PropertyId};
 use crate::compat::Feature;
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::macros::*;
 use crate::printer::Printer;
@@ -786,13 +786,13 @@ property_bitflags! {
 
 #[derive(Default, Debug)]
 pub(crate) struct FontHandler<'i> {
-  family: Option<Vec<FontFamily<'i>>>,
-  size: Option<FontSize>,
-  style: Option<FontStyle>,
-  weight: Option<FontWeight>,
-  stretch: Option<FontStretch>,
-  line_height: Option<LineHeight>,
-  variant_caps: Option<FontVariantCaps>,
+  family: PositionedPropertyOption<Vec<FontFamily<'i>>>,
+  size: PositionedPropertyOption<FontSize>,
+  style: PositionedPropertyOption<FontStyle>,
+  weight: PositionedPropertyOption<FontWeight>,
+  stretch: PositionedPropertyOption<FontStretch>,
+  line_height: PositionedPropertyOption<LineHeight>,
+  variant_caps: PositionedPropertyOption<FontVariantCaps>,
   flushed_properties: FontProperty,
   has_any: bool,
 }
@@ -800,16 +800,19 @@ pub(crate) struct FontHandler<'i> {
 impl<'i> PropertyHandler<'i> for FontHandler<'i> {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
     use Property::*;
+    let (pos, property) = property;
 
     macro_rules! flush {
       ($prop: ident, $val: expr) => {{
-        if self.$prop.is_some() && self.$prop.as_ref().unwrap() != $val && matches!(context.targets.browsers, Some(targets) if !$val.is_compatible(targets)) {
-          self.flush(dest, context);
+        if let Some((_, val)) = self.$prop.as_ref() {
+          if val != $val && matches!(context.targets.browsers, Some(targets) if !$val.is_compatible(targets)) {
+            self.flush(dest, context);
+          }
         }
       }};
     }
@@ -817,7 +820,7 @@ impl<'i> PropertyHandler<'i> for FontHandler<'i> {
     macro_rules! property {
       ($prop: ident, $val: ident) => {{
         flush!($prop, $val);
-        self.$prop = Some($val.clone());
+        self.$prop = Some((pos, $val.clone()));
         self.has_any = true;
       }};
     }
@@ -838,13 +841,13 @@ impl<'i> PropertyHandler<'i> for FontHandler<'i> {
         flush!(stretch, &val.stretch);
         flush!(line_height, &val.line_height);
         flush!(variant_caps, &val.variant_caps);
-        self.family = Some(val.family.clone());
-        self.size = Some(val.size.clone());
-        self.style = Some(val.style.clone());
-        self.weight = Some(val.weight.clone());
-        self.stretch = Some(val.stretch.clone());
-        self.line_height = Some(val.line_height.clone());
-        self.variant_caps = Some(val.variant_caps.clone());
+        self.family = Some((pos, val.family.clone()));
+        self.size = Some((pos, val.size.clone()));
+        self.style = Some((pos, val.style.clone()));
+        self.weight = Some((pos, val.weight.clone()));
+        self.stretch = Some((pos, val.stretch.clone()));
+        self.line_height = Some((pos, val.line_height.clone()));
+        self.variant_caps = Some((pos, val.variant_caps.clone()));
         self.has_any = true;
         // TODO: reset other properties
       }
@@ -853,7 +856,7 @@ impl<'i> PropertyHandler<'i> for FontHandler<'i> {
         self
           .flushed_properties
           .insert(FontProperty::try_from(&val.property_id).unwrap());
-        dest.push(property.clone());
+        dest.push((pos, property.clone()));
       }
       _ => return false,
     }
@@ -861,14 +864,14 @@ impl<'i> PropertyHandler<'i> for FontHandler<'i> {
     true
   }
 
-  fn finalize(&mut self, decls: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, decls: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     self.flush(decls, context);
     self.flushed_properties = FontProperty::empty();
   }
 }
 
 impl<'i> FontHandler<'i> {
-  fn flush(&mut self, decls: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn flush(&mut self, decls: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     if !self.has_any {
       return;
     }
@@ -877,14 +880,17 @@ impl<'i> FontHandler<'i> {
 
     macro_rules! push {
       ($prop: ident, $val: expr) => {
-        decls.push(Property::$prop($val));
+        let (pos, val) = $val;
+        decls.push((pos, Property::$prop(val)));
         self.flushed_properties.insert(FontProperty::$prop);
       };
     }
 
     let mut family = std::mem::take(&mut self.family);
     if !self.flushed_properties.contains(FontProperty::FontFamily) {
-      family = compatible_font_family(family, !should_compile!(context.targets, FontFamilySystemUi));
+      if let Some((_pos, family)) = &mut family {
+        compatible_font_family(family, !should_compile!(context.targets, FontFamilySystemUi));
+      }
     }
     let size = std::mem::take(&mut self.size);
     let style = std::mem::take(&mut self.style);
@@ -893,7 +899,7 @@ impl<'i> FontHandler<'i> {
     let line_height = std::mem::take(&mut self.line_height);
     let variant_caps = std::mem::take(&mut self.variant_caps);
 
-    if let Some(family) = &mut family {
+    if let Some((_, family)) = &mut family {
       if family.len() > 1 {
         // Dedupe.
         let mut seen = HashSet::new();
@@ -909,22 +915,37 @@ impl<'i> FontHandler<'i> {
       && line_height.is_some()
       && variant_caps.is_some()
     {
-      let caps = variant_caps.unwrap();
+      let (family_pos, family) = family.unwrap();
+      let (size_pos, size) = size.unwrap();
+      let (style_pos, style) = style.unwrap();
+      let (weight_pos, weight) = weight.unwrap();
+      let (stretch_pos, stretch) = stretch.unwrap();
+      let (line_height_pos, line_height) = line_height.unwrap();
+      let (caps_pos, caps) = variant_caps.unwrap();
       push!(
         Font,
-        Font {
-          family: family.unwrap(),
-          size: size.unwrap(),
-          style: style.unwrap(),
-          weight: weight.unwrap(),
-          stretch: stretch.unwrap(),
-          line_height: line_height.unwrap(),
-          variant_caps: if caps.is_css2() {
-            caps
-          } else {
-            FontVariantCaps::default()
-          },
-        }
+        (
+          family_pos
+            .min(size_pos)
+            .min(style_pos)
+            .min(weight_pos)
+            .min(stretch_pos)
+            .min(line_height_pos)
+            .min(caps_pos),
+          Font {
+            family,
+            size,
+            style,
+            weight,
+            stretch,
+            line_height,
+            variant_caps: if caps.is_css2() {
+              caps
+            } else {
+              FontVariantCaps::default()
+            },
+          }
+        )
       );
 
       // The `font` property only accepts CSS 2.1 values for font-variant caps.
@@ -983,23 +1004,19 @@ const DEFAULT_SYSTEM_FONTS: &[&str] = &[
 /// It is platform dependent but if not supported by the target will simply be ignored
 /// This list is an attempt at providing that support
 #[inline]
-fn compatible_font_family(mut family: Option<Vec<FontFamily>>, is_supported: bool) -> Option<Vec<FontFamily>> {
+fn compatible_font_family(family: &mut Vec<FontFamily>, is_supported: bool) {
   if is_supported {
-    return family;
+    return;
   }
 
-  if let Some(families) = &mut family {
-    if let Some(position) = families.iter().position(|v| *v == SYSTEM_UI) {
-      families.splice(
-        (position + 1)..(position + 1),
-        DEFAULT_SYSTEM_FONTS
-          .iter()
-          .map(|name| FontFamily::FamilyName(CowArcStr::from(*name))),
-      );
-    }
+  if let Some(position) = family.iter().position(|v| *v == SYSTEM_UI) {
+    family.splice(
+      (position + 1)..(position + 1),
+      DEFAULT_SYSTEM_FONTS
+        .iter()
+        .map(|name| FontFamily::FamilyName(CowArcStr::from(*name))),
+    );
   }
-
-  return family;
 }
 
 #[inline]

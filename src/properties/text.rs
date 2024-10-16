@@ -5,7 +5,7 @@
 use super::{Property, PropertyId};
 use crate::compat;
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::macros::{define_shorthand, enum_property};
 use crate::prefixes::Feature;
@@ -1098,30 +1098,31 @@ impl ToCss for TextEmphasisPosition {
 
 #[derive(Default)]
 pub(crate) struct TextDecorationHandler<'i> {
-  line: Option<(TextDecorationLine, VendorPrefix)>,
-  thickness: Option<TextDecorationThickness>,
-  style: Option<(TextDecorationStyle, VendorPrefix)>,
-  color: Option<(CssColor, VendorPrefix)>,
-  emphasis_style: Option<(TextEmphasisStyle<'i>, VendorPrefix)>,
-  emphasis_color: Option<(CssColor, VendorPrefix)>,
-  emphasis_position: Option<(TextEmphasisPosition, VendorPrefix)>,
+  line: PositionedPropertyOption<(TextDecorationLine, VendorPrefix)>,
+  thickness: PositionedPropertyOption<TextDecorationThickness>,
+  style: PositionedPropertyOption<(TextDecorationStyle, VendorPrefix)>,
+  color: PositionedPropertyOption<(CssColor, VendorPrefix)>,
+  emphasis_style: PositionedPropertyOption<(TextEmphasisStyle<'i>, VendorPrefix)>,
+  emphasis_color: PositionedPropertyOption<(CssColor, VendorPrefix)>,
+  emphasis_position: PositionedPropertyOption<(TextEmphasisPosition, VendorPrefix)>,
   has_any: bool,
 }
 
 impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
     use Property::*;
+    let (pos, property) = property;
 
     macro_rules! maybe_flush {
       ($prop: ident, $val: expr, $vp: expr) => {{
         // If two vendor prefixes for the same property have different
         // values, we need to flush what we have immediately to preserve order.
-        if let Some((val, prefixes)) = &self.$prop {
+        if let Some((_, (val, prefixes))) = &self.$prop {
           if val != $val && !prefixes.contains(*$vp) {
             self.finalize(dest, context);
           }
@@ -1134,11 +1135,12 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
         maybe_flush!($prop, $val, $vp);
 
         // Otherwise, update the value and add the prefix.
-        if let Some((val, prefixes)) = &mut self.$prop {
+        if let Some((val_pos, (val, prefixes))) = &mut self.$prop {
+          *val_pos = pos;
           *val = $val.clone();
           *prefixes |= *$vp;
         } else {
-          self.$prop = Some(($val.clone(), *$vp));
+          self.$prop = Some((pos, ($val.clone(), *$vp)));
           self.has_any = true;
         }
       }};
@@ -1147,7 +1149,7 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
     match property {
       TextDecorationLine(val, vp) => property!(line, val, vp),
       TextDecorationThickness(val) => {
-        self.thickness = Some(val.clone());
+        self.thickness = Some((pos, val.clone()));
         self.has_any = true;
       }
       TextDecorationStyle(val, vp) => property!(style, val, vp),
@@ -1157,7 +1159,7 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
         maybe_flush!(style, &val.style, vp);
         maybe_flush!(color, &val.color, vp);
         property!(line, &val.line, vp);
-        self.thickness = Some(val.thickness.clone());
+        self.thickness = Some((pos, val.thickness.clone()));
         property!(style, &val.style, vp);
         property!(color, &val.color, vp);
       }
@@ -1176,7 +1178,7 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
           ($ltr: ident, $rtl: ident) => {{
             let logical_supported = !context.should_compile_logical(compat::Feature::LogicalTextAlign);
             if logical_supported {
-              dest.push(property.clone());
+              dest.push((pos, property.clone()));
             } else {
               context.add_logical_rule(
                 Property::TextAlign(TextAlign::$ltr),
@@ -1189,20 +1191,20 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
         match align {
           TextAlign::Start => logical!(Left, Right),
           TextAlign::End => logical!(Right, Left),
-          _ => dest.push(property.clone()),
+          _ => dest.push((pos, property.clone())),
         }
       }
       Unparsed(val) if is_text_decoration_property(&val.property_id) => {
         self.finalize(dest, context);
         let mut unparsed = val.get_prefixed(context.targets, Feature::TextDecoration);
         context.add_unparsed_fallbacks(&mut unparsed);
-        dest.push(Property::Unparsed(unparsed))
+        dest.push((pos, Property::Unparsed(unparsed)))
       }
       Unparsed(val) if is_text_emphasis_property(&val.property_id) => {
         self.finalize(dest, context);
         let mut unparsed = val.get_prefixed(context.targets, Feature::TextEmphasis);
         context.add_unparsed_fallbacks(&mut unparsed);
-        dest.push(Property::Unparsed(unparsed))
+        dest.push((pos, Property::Unparsed(unparsed)))
       }
       _ => return false,
     }
@@ -1210,7 +1212,7 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
     true
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     if !self.has_any {
       return;
     }
@@ -1225,8 +1227,12 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
     let mut emphasis_color = std::mem::take(&mut self.emphasis_color);
     let emphasis_position = std::mem::take(&mut self.emphasis_position);
 
-    if let (Some((line, line_vp)), Some(thickness_val), Some((style, style_vp)), Some((color, color_vp))) =
-      (&mut line, &mut thickness, &mut style, &mut color)
+    if let (
+      Some((line_pos, (line, line_vp))),
+      Some((thickness_val_pos, thickness_val)),
+      Some((style_pos, (style, style_vp))),
+      Some((color_pos, (color, color_vp))),
+    ) = (&mut line, &mut thickness, &mut style, &mut color)
     {
       let intersection = *line_vp | *style_vp | *color_vp;
       if !intersection.is_empty() {
@@ -1244,6 +1250,7 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
           style: style.clone(),
           color: color.clone(),
         };
+        let decoration_pos = *line_pos.min(thickness_val_pos).min(style_pos).min(color_pos);
 
         // Only add prefixes if one of the new sub-properties was used
         if prefix.contains(VendorPrefix::None)
@@ -1253,11 +1260,11 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
 
           let fallbacks = decoration.get_fallbacks(context.targets);
           for fallback in fallbacks {
-            dest.push(Property::TextDecoration(fallback, prefix))
+            dest.push((decoration_pos, Property::TextDecoration(fallback, prefix)))
           }
         }
 
-        dest.push(Property::TextDecoration(decoration, prefix));
+        dest.push((decoration_pos, Property::TextDecoration(decoration, prefix)));
         line_vp.remove(intersection);
         style_vp.remove(intersection);
         color_vp.remove(intersection);
@@ -1269,16 +1276,16 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
 
     macro_rules! color {
       ($key: ident, $prop: ident) => {
-        if let Some((mut val, vp)) = $key {
+        if let Some((pos, (mut val, vp))) = $key {
           if !vp.is_empty() {
             let prefix = context.targets.prefixes(vp, Feature::$prop);
             if prefix.contains(VendorPrefix::None) {
               let fallbacks = val.get_fallbacks(context.targets);
               for fallback in fallbacks {
-                dest.push(Property::$prop(fallback, prefix))
+                dest.push((pos, Property::$prop(fallback, prefix)))
               }
             }
-            dest.push(Property::$prop(val, prefix))
+            dest.push((pos, Property::$prop(val, prefix)))
           }
         }
       };
@@ -1286,10 +1293,10 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
 
     macro_rules! single_property {
       ($key: ident, $prop: ident) => {
-        if let Some((val, vp)) = $key {
+        if let Some((pos, (val, vp))) = $key {
           if !vp.is_empty() {
             let prefix = context.targets.prefixes(vp, Feature::$prop);
-            dest.push(Property::$prop(val, prefix))
+            dest.push((pos, Property::$prop(val, prefix)))
           }
         }
       };
@@ -1299,7 +1306,7 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
     single_property!(style, TextDecorationStyle);
     color!(color, TextDecorationColor);
 
-    if let Some(thickness) = thickness {
+    if let Some((pos, thickness)) = thickness {
       // Percentages in the text-decoration-thickness property are based on 1em.
       // If unsupported, compile this to a calc() instead.
       match thickness {
@@ -1311,13 +1318,15 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
             Box::new(Calc::Value(Box::new(LengthPercentage::Dimension(LengthValue::Em(1.0))))),
           ))));
           let thickness = TextDecorationThickness::LengthPercentage(LengthPercentage::Calc(Box::new(calc)));
-          dest.push(Property::TextDecorationThickness(thickness));
+          dest.push((pos, Property::TextDecorationThickness(thickness)));
         }
-        thickness => dest.push(Property::TextDecorationThickness(thickness)),
+        thickness => dest.push((pos, Property::TextDecorationThickness(thickness))),
       }
     }
 
-    if let (Some((style, style_vp)), Some((color, color_vp))) = (&mut emphasis_style, &mut emphasis_color) {
+    if let (Some((style_pos, (style, style_vp))), Some((color_pos, (color, color_vp)))) =
+      (&mut emphasis_style, &mut emphasis_color)
+    {
       let intersection = *style_vp | *color_vp;
       if !intersection.is_empty() {
         let prefix = context.targets.prefixes(intersection, Feature::TextEmphasis);
@@ -1325,15 +1334,16 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
           style: style.clone(),
           color: color.clone(),
         };
+        let emphasis_pos = *style_pos.min(color_pos);
 
         if prefix.contains(VendorPrefix::None) {
           let fallbacks = emphasis.get_fallbacks(context.targets);
           for fallback in fallbacks {
-            dest.push(Property::TextEmphasis(fallback, prefix))
+            dest.push((emphasis_pos, Property::TextEmphasis(fallback, prefix)))
           }
         }
 
-        dest.push(Property::TextEmphasis(emphasis, prefix));
+        dest.push((emphasis_pos, Property::TextEmphasis(emphasis, prefix)));
         style_vp.remove(intersection);
         color_vp.remove(intersection);
       }
@@ -1342,14 +1352,14 @@ impl<'i> PropertyHandler<'i> for TextDecorationHandler<'i> {
     single_property!(emphasis_style, TextEmphasisStyle);
     color!(emphasis_color, TextEmphasisColor);
 
-    if let Some((pos, vp)) = emphasis_position {
+    if let Some((pos, (emphasis_position, vp))) = emphasis_position {
       if !vp.is_empty() {
         let mut prefix = context.targets.prefixes(vp, Feature::TextEmphasisPosition);
         // Prefixed version does not support horizontal keyword.
-        if pos.horizontal != TextEmphasisPositionHorizontal::Right {
+        if emphasis_position.horizontal != TextEmphasisPositionHorizontal::Right {
           prefix = VendorPrefix::None;
         }
-        dest.push(Property::TextEmphasisPosition(pos, prefix))
+        dest.push((pos, Property::TextEmphasisPosition(emphasis_position, prefix)))
       }
     }
   }

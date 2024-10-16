@@ -1,7 +1,7 @@
 //! Traits for parsing and serializing CSS.
 
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList};
 use crate::error::{ParserError, PrinterError};
 use crate::printer::Printer;
 use crate::properties::{Property, PropertyId};
@@ -130,11 +130,11 @@ impl<T: ToCss> ToCss for Option<T> {
 pub(crate) trait PropertyHandler<'i>: Sized {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool;
-  fn finalize(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>);
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>);
 }
 
 pub(crate) mod private {

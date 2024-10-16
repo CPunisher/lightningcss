@@ -1,7 +1,7 @@
 //! CSS properties related to border images.
 
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::prefixes::Feature;
 use crate::printer::Printer;
@@ -367,11 +367,11 @@ property_bitflags! {
 
 #[derive(Debug)]
 pub(crate) struct BorderImageHandler<'i> {
-  source: Option<Image<'i>>,
-  slice: Option<BorderImageSlice>,
-  width: Option<Rect<BorderImageSideWidth>>,
-  outset: Option<Rect<LengthOrNumber>>,
-  repeat: Option<BorderImageRepeat>,
+  source: PositionedPropertyOption<Image<'i>>,
+  slice: PositionedPropertyOption<BorderImageSlice>,
+  width: PositionedPropertyOption<Rect<BorderImageSideWidth>>,
+  outset: PositionedPropertyOption<Rect<LengthOrNumber>>,
+  repeat: PositionedPropertyOption<BorderImageRepeat>,
   vendor_prefix: VendorPrefix,
   flushed_properties: BorderImageProperty,
   has_any: bool,
@@ -395,11 +395,13 @@ impl<'i> Default for BorderImageHandler<'i> {
 impl<'i> PropertyHandler<'i> for BorderImageHandler<'i> {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
     use Property::*;
+    let (pos, property) = property;
+
     macro_rules! property {
       ($name: ident, $val: ident) => {{
         if self.vendor_prefix != VendorPrefix::None {
@@ -407,15 +409,17 @@ impl<'i> PropertyHandler<'i> for BorderImageHandler<'i> {
         }
         flush!($name, $val);
         self.vendor_prefix = VendorPrefix::None;
-        self.$name = Some($val.clone());
+        self.$name = Some((pos, $val.clone()));
         self.has_any = true;
       }};
     }
 
     macro_rules! flush {
       ($name: ident, $val: expr) => {{
-        if self.$name.is_some() && self.$name.as_ref().unwrap() != $val && matches!(context.targets.browsers, Some(targets) if !$val.is_compatible(targets)) {
-          self.flush(dest, context);
+        if let Some((_, val)) = self.$name.as_ref() {
+          if val != $val && matches!(context.targets.browsers, Some(targets) if !$val.is_compatible(targets)) {
+            self.flush(dest, context);
+          }
         }
       }};
     }
@@ -432,11 +436,11 @@ impl<'i> PropertyHandler<'i> for BorderImageHandler<'i> {
         flush!(width, &val.width);
         flush!(outset, &val.outset);
         flush!(repeat, &val.repeat);
-        self.source = Some(val.source.clone());
-        self.slice = Some(val.slice.clone());
-        self.width = Some(val.width.clone());
-        self.outset = Some(val.outset.clone());
-        self.repeat = Some(val.repeat.clone());
+        self.source = Some((pos, val.source.clone()));
+        self.slice = Some((pos, val.slice.clone()));
+        self.width = Some((pos, val.width.clone()));
+        self.outset = Some((pos, val.outset.clone()));
+        self.repeat = Some((pos, val.repeat.clone()));
         self.vendor_prefix |= *vp;
         self.has_any = true;
       }
@@ -455,7 +459,7 @@ impl<'i> PropertyHandler<'i> for BorderImageHandler<'i> {
         self
           .flushed_properties
           .insert(BorderImageProperty::try_from(&unparsed.property_id).unwrap());
-        dest.push(Property::Unparsed(unparsed));
+        dest.push((pos, Property::Unparsed(unparsed)));
       }
       _ => return false,
     }
@@ -463,7 +467,7 @@ impl<'i> PropertyHandler<'i> for BorderImageHandler<'i> {
     true
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     self.flush(dest, context);
     self.flushed_properties = BorderImageProperty::empty();
   }
@@ -488,7 +492,7 @@ impl<'i> BorderImageHandler<'i> {
     }
   }
 
-  fn flush(&mut self, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
+  fn flush(&mut self, dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) {
     if !self.has_any {
       return;
     }
@@ -496,8 +500,8 @@ impl<'i> BorderImageHandler<'i> {
     self.has_any = false;
 
     macro_rules! push {
-      ($prop: ident, $val: expr) => {
-        dest.push(Property::$prop($val));
+      ($pos: expr, $prop: ident, $val: expr) => {
+        dest.push(($pos, Property::$prop($val)));
         self.flushed_properties.insert(BorderImageProperty::$prop);
       };
     }
@@ -509,13 +513,21 @@ impl<'i> BorderImageHandler<'i> {
     let repeat = std::mem::take(&mut self.repeat);
 
     if source.is_some() && slice.is_some() && width.is_some() && outset.is_some() && repeat.is_some() {
+      let (source_pos, source) = source.unwrap();
+      let (slice_pos, slice) = slice.unwrap();
+      let (width_pos, width) = width.unwrap();
+      let (outset_pos, outset) = outset.unwrap();
+      let (repeat_pos, repeat) = repeat.unwrap();
+
       let mut border_image = BorderImage {
-        source: source.unwrap(),
-        slice: slice.unwrap(),
-        width: width.unwrap(),
-        outset: outset.unwrap(),
-        repeat: repeat.unwrap(),
+        source,
+        slice,
+        width,
+        outset,
+        repeat,
       };
+
+      let pos = source_pos.min(slice_pos).min(width_pos).min(outset_pos).min(repeat_pos);
 
       let mut prefix = self.vendor_prefix;
       if prefix.contains(VendorPrefix::None) && !border_image.slice.fill {
@@ -530,7 +542,7 @@ impl<'i> BorderImageHandler<'i> {
             if p.is_empty() {
               p = prefix;
             }
-            dest.push(Property::BorderImage(fallback, p));
+            dest.push((pos, Property::BorderImage(fallback, p)));
           }
         }
       }
@@ -540,34 +552,34 @@ impl<'i> BorderImageHandler<'i> {
         prefix = p;
       }
 
-      dest.push(Property::BorderImage(border_image, prefix));
+      dest.push((pos, Property::BorderImage(border_image, prefix)));
       self.flushed_properties.insert(BorderImageProperty::BorderImage);
     } else {
-      if let Some(mut source) = source {
+      if let Some((pos, mut source)) = source {
         if !self.flushed_properties.contains(BorderImageProperty::BorderImageSource) {
           let fallbacks = source.get_fallbacks(context.targets);
           for fallback in fallbacks {
-            dest.push(Property::BorderImageSource(fallback));
+            dest.push((pos, Property::BorderImageSource(fallback)));
           }
         }
 
-        push!(BorderImageSource, source);
+        push!(pos, BorderImageSource, source);
       }
 
-      if let Some(slice) = slice {
-        push!(BorderImageSlice, slice);
+      if let Some((pos, slice)) = slice {
+        push!(pos, BorderImageSlice, slice);
       }
 
-      if let Some(width) = width {
-        push!(BorderImageWidth, width);
+      if let Some((pos, width)) = width {
+        push!(pos, BorderImageWidth, width);
       }
 
-      if let Some(outset) = outset {
-        push!(BorderImageOutset, outset);
+      if let Some((pos, outset)) = outset {
+        push!(pos, BorderImageOutset, outset);
       }
 
-      if let Some(repeat) = repeat {
-        push!(BorderImageRepeat, repeat);
+      if let Some((pos, repeat)) = repeat {
+        push!(pos, BorderImageRepeat, repeat);
       }
     }
 

@@ -3,7 +3,7 @@
 use super::border::{BorderSideWidth, GenericBorder, LineStyle};
 use super::{Property, PropertyId};
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::macros::{impl_shorthand, shorthand_handler};
 use crate::printer::Printer;

@@ -41,6 +41,7 @@ use crate::values::string::CowArcStr;
 #[cfg(feature = "visitor")]
 use crate::visitor::Visit;
 use cssparser::*;
+use itertools::Itertools;
 
 /// A CSS declaration block.
 ///
@@ -192,12 +193,12 @@ impl<'i> DeclarationBlock<'i> {
   ) {
     macro_rules! handle {
       ($decls: expr, $handler: expr, $important: literal) => {
-        for decl in $decls.iter() {
+        for positioned_decl in $decls.iter().enumerate() {
           context.is_important = $important;
-          let handled = $handler.handle_property(decl, context);
+          let handled = $handler.handle_property(positioned_decl, context);
 
           if !handled {
-            $handler.decls.push(decl.clone());
+            $handler.decls.push((positioned_decl.0, positioned_decl.1.clone()));
           }
         }
       };
@@ -208,8 +209,16 @@ impl<'i> DeclarationBlock<'i> {
 
     handler.finalize(context);
     important_handler.finalize(context);
-    self.important_declarations = std::mem::take(&mut important_handler.decls);
-    self.declarations = std::mem::take(&mut handler.decls);
+    self.important_declarations = std::mem::take(&mut important_handler.decls)
+      .into_iter()
+      .sorted_by(|decl1, decl2| Ord::cmp(&decl1.0, &decl2.0))
+      .map(|positioned_decl| positioned_decl.1)
+      .collect();
+    self.declarations = std::mem::take(&mut handler.decls)
+      .into_iter()
+      .sorted_by(|decl1, decl2| Ord::cmp(&decl1.0, &decl2.0))
+      .map(|positioned_decl| positioned_decl.1)
+      .collect();
   }
 
   /// Returns whether the declaration block is empty.
@@ -486,6 +495,8 @@ pub(crate) fn parse_declaration<'i, 't>(
 }
 
 pub(crate) type DeclarationList<'i> = Vec<Property<'i>>;
+pub(crate) type PositionedDeclarationList<'i> = Vec<(usize, Property<'i>)>;
+pub(crate) type PositionedPropertyOption<P> = Option<(usize, P)>;
 
 #[derive(Default)]
 pub(crate) struct DeclarationHandler<'i> {
@@ -516,16 +527,16 @@ pub(crate) struct DeclarationHandler<'i> {
   color_scheme: ColorSchemeHandler,
   fallback: FallbackHandler,
   prefix: PrefixHandler,
-  direction: Option<Direction>,
-  unicode_bidi: Option<UnicodeBidi>,
+  direction: PositionedPropertyOption<Direction>,
+  unicode_bidi: PositionedPropertyOption<UnicodeBidi>,
   custom_properties: HashMap<DashedIdent<'i>, usize>,
-  decls: DeclarationList<'i>,
+  decls: PositionedDeclarationList<'i>,
 }
 
 impl<'i> DeclarationHandler<'i> {
   pub fn handle_property(
     &mut self,
-    property: &Property<'i>,
+    property: (usize, &Property<'i>),
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
     self.background.handle_property(property, &mut self.decls, context)
@@ -561,27 +572,27 @@ impl<'i> DeclarationHandler<'i> {
 
   fn handle_custom_property(
     &mut self,
-    property: &Property<'i>,
+    property: (usize, &Property<'i>),
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
-    if let Property::Custom(custom) = property {
+    if let (pos, Property::Custom(custom)) = property {
       if context.unused_symbols.contains(custom.name.as_ref()) {
         return true;
       }
 
       if let CustomPropertyName::Custom(name) = &custom.name {
         if let Some(index) = self.custom_properties.get(name) {
-          if self.decls[*index] == *property {
+          if self.decls[*index].1 == *property.1 {
             return true;
           }
           let mut custom = custom.clone();
           self.add_conditional_fallbacks(&mut custom, context);
-          self.decls[*index] = Property::Custom(custom);
+          self.decls[*index] = (pos, Property::Custom(custom));
         } else {
           self.custom_properties.insert(name.clone(), self.decls.len());
           let mut custom = custom.clone();
           self.add_conditional_fallbacks(&mut custom, context);
-          self.decls.push(Property::Custom(custom));
+          self.decls.push((pos, Property::Custom(custom)));
         }
 
         return true;
@@ -591,19 +602,19 @@ impl<'i> DeclarationHandler<'i> {
     false
   }
 
-  fn handle_all(&mut self, property: &Property<'i>) -> bool {
+  fn handle_all(&mut self, property: (usize, &Property<'i>)) -> bool {
     // The `all` property resets all properies except `unicode-bidi`, `direction`, and custom properties.
     // https://drafts.csswg.org/css-cascade-5/#all-shorthand
     match property {
-      Property::UnicodeBidi(bidi) => {
-        self.unicode_bidi = Some(*bidi);
+      (pos, Property::UnicodeBidi(bidi)) => {
+        self.unicode_bidi = Some((pos, *bidi));
         true
       }
-      Property::Direction(direction) => {
-        self.direction = Some(*direction);
+      (pos, Property::Direction(direction)) => {
+        self.direction = Some((pos, *direction));
         true
       }
-      Property::All(keyword) => {
+      (pos, Property::All(keyword)) => {
         let mut handler = DeclarationHandler {
           unicode_bidi: self.unicode_bidi.clone(),
           direction: self.direction.clone(),
@@ -613,7 +624,7 @@ impl<'i> DeclarationHandler<'i> {
           handler.custom_properties.insert(key, handler.decls.len());
           handler.decls.push(self.decls[index].clone());
         }
-        handler.decls.push(Property::All(keyword.clone()));
+        handler.decls.push((pos, Property::All(keyword.clone())));
         *self = handler;
         true
       }
@@ -641,11 +652,11 @@ impl<'i> DeclarationHandler<'i> {
   }
 
   pub fn finalize(&mut self, context: &mut PropertyHandlerContext<'i, '_>) {
-    if let Some(direction) = std::mem::take(&mut self.direction) {
-      self.decls.push(Property::Direction(direction));
+    if let Some((pos, direction)) = std::mem::take(&mut self.direction) {
+      self.decls.push((pos, Property::Direction(direction)));
     }
-    if let Some(unicode_bidi) = std::mem::take(&mut self.unicode_bidi) {
-      self.decls.push(Property::UnicodeBidi(unicode_bidi));
+    if let Some((pos, unicode_bidi)) = std::mem::take(&mut self.unicode_bidi) {
+      self.decls.push((pos, Property::UnicodeBidi(unicode_bidi)));
     }
 
     self.background.finalize(&mut self.decls, context);

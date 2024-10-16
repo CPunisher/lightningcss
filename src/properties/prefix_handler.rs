@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 use super::{Property, PropertyId};
 use crate::context::PropertyHandlerContext;
-use crate::declaration::DeclarationList;
+use crate::declaration::PositionedDeclarationList;
 use crate::prefixes::Feature;
 use crate::traits::{FallbackValues, IsCompatible, PropertyHandler};
 use crate::vendor_prefix::VendorPrefix;
@@ -18,16 +18,18 @@ macro_rules! define_prefixes {
     }
 
     impl<'i> PropertyHandler<'i> for PrefixHandler {
-      fn handle_property(&mut self, property: &Property<'i>, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext) -> bool {
+      fn handle_property(&mut self, property: (usize, &Property<'i>), dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext) -> bool {
+        let (pos, property) = property;
         match property {
           $(
             Property::$name(val, prefix) => {
               if let Some(i) = self.$name {
-                if let Some(decl) = dest.get_mut(i) {
+                if let Some((val_pos, decl)) = dest.get_mut(i) {
                   if let Property::$name(cur, prefixes) = decl {
                     // If the value is the same, update the prefix.
                     // If the prefix is the same, then update the value.
                     if val == cur || prefixes.contains(*prefix) {
+                      *val_pos = pos;
                       *cur = val.clone();
                       *prefixes |= *prefix;
                       *prefixes = context.targets.prefixes(*prefixes, Feature::$name);
@@ -42,7 +44,7 @@ macro_rules! define_prefixes {
 
               // Store the index of the property, so we can update it later.
               self.$name = Some(dest.len());
-              dest.push(Property::$name(val.clone(), prefixes))
+              dest.push((pos, Property::$name(val.clone(), prefixes)))
             }
           )+
           _ => return false
@@ -51,7 +53,7 @@ macro_rules! define_prefixes {
         true
       }
 
-      fn finalize(&mut self, _: &mut DeclarationList, _: &mut PropertyHandlerContext) {}
+      fn finalize(&mut self, _: &mut PositionedDeclarationList, _: &mut PropertyHandlerContext) {}
     }
   };
 }
@@ -89,7 +91,8 @@ macro_rules! define_fallbacks {
     }
 
     impl<'i> PropertyHandler<'i> for FallbackHandler {
-      fn handle_property(&mut self, property: &Property<'i>, dest: &mut DeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) -> bool {
+      fn handle_property(&mut self, property: (usize, &Property<'i>), dest: &mut PositionedDeclarationList<'i>, context: &mut PropertyHandlerContext<'i, '_>) -> bool {
+        let (pos, property) = property;
         match property {
           $(
             Property::$name(val $(, mut $p)?) => {
@@ -102,7 +105,7 @@ macro_rules! define_fallbacks {
                 #[allow(unused_variables)]
                 let has_fallbacks = !fallbacks.is_empty();
                 for fallback in fallbacks {
-                  dest.push(Property::$name(fallback $(, $p)?))
+                  dest.push((pos, Property::$name(fallback $(, $p)?)))
                 }
 
                 $(
@@ -114,9 +117,9 @@ macro_rules! define_fallbacks {
 
               if paste::paste! { self.[<$name:snake>] }.is_none() || matches!(context.targets.browsers, Some(targets) if !val.is_compatible(targets)) {
                 paste::paste! { self.[<$name:snake>] = Some(dest.len()) };
-                dest.push(Property::$name(val $(, $p)?));
+                dest.push((pos, Property::$name(val $(, $p)?)));
               } else if let Some(index) = paste::paste! { self.[<$name:snake>] } {
-                dest[index] = Property::$name(val $(, $p)?);
+                dest[index] = (pos, Property::$name(val $(, $p)?));
               }
             }
           )+
@@ -147,10 +150,10 @@ macro_rules! define_fallbacks {
             // Unparsed properties are always "valid", meaning they always override previous declarations.
             context.add_unparsed_fallbacks(&mut unparsed);
             if let Some(index) = *index {
-              dest[index] = Property::Unparsed(unparsed);
+              dest[index] = (pos, Property::Unparsed(unparsed));
             } else {
               *index = Some(dest.len());
-              dest.push(Property::Unparsed(unparsed));
+              dest.push((pos, Property::Unparsed(unparsed)));
             }
           }
           _ => return false
@@ -159,7 +162,7 @@ macro_rules! define_fallbacks {
         true
       }
 
-      fn finalize(&mut self, _: &mut DeclarationList, _: &mut PropertyHandlerContext) {
+      fn finalize(&mut self, _: &mut PositionedDeclarationList, _: &mut PropertyHandlerContext) {
         $(
           paste::paste! { self.[<$name:snake>] = None };
         )+

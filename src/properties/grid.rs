@@ -3,7 +3,7 @@
 #![allow(non_upper_case_globals)]
 
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{Error, ErrorLocation, ParserError, PrinterError, PrinterErrorKind};
 use crate::macros::{define_shorthand, impl_shorthand};
 use crate::printer::Printer;
@@ -1580,69 +1580,70 @@ impl ToCss for GridArea<'_> {
 
 #[derive(Default, Debug)]
 pub(crate) struct GridHandler<'i> {
-  rows: Option<TrackSizing<'i>>,
-  columns: Option<TrackSizing<'i>>,
-  areas: Option<GridTemplateAreas>,
-  auto_rows: Option<TrackSizeList>,
-  auto_columns: Option<TrackSizeList>,
-  auto_flow: Option<GridAutoFlow>,
-  row_start: Option<GridLine<'i>>,
-  column_start: Option<GridLine<'i>>,
-  row_end: Option<GridLine<'i>>,
-  column_end: Option<GridLine<'i>>,
+  rows: PositionedPropertyOption<TrackSizing<'i>>,
+  columns: PositionedPropertyOption<TrackSizing<'i>>,
+  areas: PositionedPropertyOption<GridTemplateAreas>,
+  auto_rows: PositionedPropertyOption<TrackSizeList>,
+  auto_columns: PositionedPropertyOption<TrackSizeList>,
+  auto_flow: PositionedPropertyOption<GridAutoFlow>,
+  row_start: PositionedPropertyOption<GridLine<'i>>,
+  column_start: PositionedPropertyOption<GridLine<'i>>,
+  row_end: PositionedPropertyOption<GridLine<'i>>,
+  column_end: PositionedPropertyOption<GridLine<'i>>,
   has_any: bool,
 }
 
 impl<'i> PropertyHandler<'i> for GridHandler<'i> {
   fn handle_property(
     &mut self,
-    property: &Property<'i>,
-    dest: &mut DeclarationList<'i>,
+    property: (usize, &Property<'i>),
+    dest: &mut PositionedDeclarationList<'i>,
     context: &mut PropertyHandlerContext<'i, '_>,
   ) -> bool {
     use Property::*;
+    let (pos, property) = property;
 
     match property {
-      GridTemplateColumns(columns) => self.columns = Some(columns.clone()),
-      GridTemplateRows(rows) => self.rows = Some(rows.clone()),
-      GridTemplateAreas(areas) => self.areas = Some(areas.clone()),
-      GridAutoColumns(auto_columns) => self.auto_columns = Some(auto_columns.clone()),
-      GridAutoRows(auto_rows) => self.auto_rows = Some(auto_rows.clone()),
-      GridAutoFlow(auto_flow) => self.auto_flow = Some(auto_flow.clone()),
+      GridTemplateColumns(columns) => self.columns = Some((pos, columns.clone())),
+      GridTemplateRows(rows) => self.rows = Some((pos, rows.clone())),
+      GridTemplateAreas(areas) => self.areas = Some((pos, areas.clone())),
+      GridAutoColumns(auto_columns) => self.auto_columns = Some((pos, auto_columns.clone())),
+      GridAutoRows(auto_rows) => self.auto_rows = Some((pos, auto_rows.clone())),
+      GridAutoFlow(auto_flow) => self.auto_flow = Some((pos, auto_flow.clone())),
       GridTemplate(template) => {
-        self.rows = Some(template.rows.clone());
-        self.columns = Some(template.columns.clone());
-        self.areas = Some(template.areas.clone());
+        self.rows = Some((pos, template.rows.clone()));
+        self.columns = Some((pos, template.columns.clone()));
+        self.areas = Some((pos, template.areas.clone()));
       }
       Grid(grid) => {
-        self.rows = Some(grid.rows.clone());
-        self.columns = Some(grid.columns.clone());
-        self.areas = Some(grid.areas.clone());
-        self.auto_rows = Some(grid.auto_rows.clone());
-        self.auto_columns = Some(grid.auto_columns.clone());
-        self.auto_flow = Some(grid.auto_flow.clone());
+        self.rows = Some((pos, grid.rows.clone()));
+        self.columns = Some((pos, grid.columns.clone()));
+        self.areas = Some((pos, grid.areas.clone()));
+        self.auto_rows = Some((pos, grid.auto_rows.clone()));
+        self.auto_columns = Some((pos, grid.auto_columns.clone()));
+        self.auto_flow = Some((pos, grid.auto_flow.clone()));
       }
-      GridRowStart(row_start) => self.row_start = Some(row_start.clone()),
-      GridRowEnd(row_end) => self.row_end = Some(row_end.clone()),
-      GridColumnStart(column_start) => self.column_start = Some(column_start.clone()),
-      GridColumnEnd(column_end) => self.column_end = Some(column_end.clone()),
+      GridRowStart(row_start) => self.row_start = Some((pos, row_start.clone())),
+      GridRowEnd(row_end) => self.row_end = Some((pos, row_end.clone())),
+      GridColumnStart(column_start) => self.column_start = Some((pos, column_start.clone())),
+      GridColumnEnd(column_end) => self.column_end = Some((pos, column_end.clone())),
       GridRow(row) => {
-        self.row_start = Some(row.start.clone());
-        self.row_end = Some(row.end.clone());
+        self.row_start = Some((pos, row.start.clone()));
+        self.row_end = Some((pos, row.end.clone()));
       }
       GridColumn(column) => {
-        self.column_start = Some(column.start.clone());
-        self.column_end = Some(column.end.clone());
+        self.column_start = Some((pos, column.start.clone()));
+        self.column_end = Some((pos, column.end.clone()));
       }
       GridArea(area) => {
-        self.row_start = Some(area.row_start.clone());
-        self.row_end = Some(area.row_end.clone());
-        self.column_start = Some(area.column_start.clone());
-        self.column_end = Some(area.column_end.clone());
+        self.row_start = Some((pos, area.row_start.clone()));
+        self.row_end = Some((pos, area.row_end.clone()));
+        self.column_start = Some((pos, area.column_start.clone()));
+        self.column_end = Some((pos, area.column_end.clone()));
       }
       Unparsed(val) if is_grid_property(&val.property_id) => {
         self.finalize(dest, context);
-        dest.push(property.clone());
+        dest.push((pos, property.clone()));
       }
       _ => return false,
     }
@@ -1651,7 +1652,7 @@ impl<'i> PropertyHandler<'i> for GridHandler<'i> {
     true
   }
 
-  fn finalize(&mut self, dest: &mut DeclarationList<'i>, _: &mut PropertyHandlerContext<'i, '_>) {
+  fn finalize(&mut self, dest: &mut PositionedDeclarationList<'i>, _: &mut PropertyHandlerContext<'i, '_>) {
     if !self.has_any {
       return;
     }
@@ -1669,10 +1670,18 @@ impl<'i> PropertyHandler<'i> for GridHandler<'i> {
     let mut column_start = std::mem::take(&mut self.column_start);
     let mut column_end = std::mem::take(&mut self.column_end);
 
-    if let (Some(rows_val), Some(columns_val), Some(areas_val)) = (&rows, &columns, &areas) {
+    if let (
+      Some((rows_val_pos, rows_val)),
+      Some((columns_val_pos, columns_val)),
+      Some((areas_val_pos, areas_val)),
+    ) = (&rows, &columns, &areas)
+    {
       let mut has_template = true;
-      if let (Some(auto_rows_val), Some(auto_columns_val), Some(auto_flow_val)) =
-        (&auto_rows, &auto_columns, &auto_flow)
+      if let (
+        Some((auto_rows_val_pos, auto_rows_val)),
+        Some((auto_columns_val_pos, auto_columns_val)),
+        Some((auto_flow_val_pos, auto_flow_val)),
+      ) = (&auto_rows, &auto_columns, &auto_flow)
       {
         // The `grid` shorthand can either be fully explicit (e.g. same as `grid-template`),
         // or explicit along a single axis. If there are auto rows, then there cannot be explicit rows, for example.
@@ -1684,14 +1693,22 @@ impl<'i> PropertyHandler<'i> for GridHandler<'i> {
           auto_columns_val,
           auto_flow_val,
         ) {
-          dest.push(Property::Grid(Grid {
-            rows: rows_val.clone(),
-            columns: columns_val.clone(),
-            areas: areas_val.clone(),
-            auto_rows: auto_rows_val.clone(),
-            auto_columns: auto_columns_val.clone(),
-            auto_flow: auto_flow_val.clone(),
-          }));
+          dest.push((
+            *rows_val_pos
+              .min(columns_val_pos)
+              .min(areas_val_pos)
+              .min(auto_rows_val_pos)
+              .min(auto_columns_val_pos)
+              .min(auto_flow_val_pos),
+            Property::Grid(Grid {
+              rows: rows_val.clone(),
+              columns: columns_val.clone(),
+              areas: areas_val.clone(),
+              auto_rows: auto_rows_val.clone(),
+              auto_columns: auto_columns_val.clone(),
+              auto_flow: auto_flow_val.clone(),
+            }),
+          ));
 
           has_template = false;
           auto_rows = None;
@@ -1703,11 +1720,14 @@ impl<'i> PropertyHandler<'i> for GridHandler<'i> {
       // The `grid-template` shorthand supports only explicit track values (i.e. no `repeat()`)
       // combined with grid-template-areas. If there are no areas, then any track values are allowed.
       if has_template && GridTemplate::is_valid(rows_val, columns_val, areas_val) {
-        dest.push(Property::GridTemplate(GridTemplate {
-          rows: rows_val.clone(),
-          columns: columns_val.clone(),
-          areas: areas_val.clone(),
-        }));
+        dest.push((
+          *rows_val_pos.min(columns_val_pos).min(areas_val_pos),
+          Property::GridTemplate(GridTemplate {
+            rows: rows_val.clone(),
+            columns: columns_val.clone(),
+            areas: areas_val.clone(),
+          }),
+        ));
 
         has_template = false;
       }
@@ -1720,32 +1740,49 @@ impl<'i> PropertyHandler<'i> for GridHandler<'i> {
     }
 
     if row_start.is_some() && row_end.is_some() && column_start.is_some() && column_end.is_some() {
-      dest.push(Property::GridArea(GridArea {
-        row_start: std::mem::take(&mut row_start).unwrap(),
-        row_end: std::mem::take(&mut row_end).unwrap(),
-        column_start: std::mem::take(&mut column_start).unwrap(),
-        column_end: std::mem::take(&mut column_end).unwrap(),
-      }))
+      let (row_start_pos, row_start) = std::mem::take(&mut row_start).unwrap();
+      let (row_end_pos, row_end) = std::mem::take(&mut row_end).unwrap();
+      let (column_start_pos, column_start) = std::mem::take(&mut column_start).unwrap();
+      let (column_end_pos, column_end) = std::mem::take(&mut column_end).unwrap();
+      dest.push((
+        row_start_pos.min(row_end_pos).min(column_start_pos).min(column_end_pos),
+        Property::GridArea(GridArea {
+          row_start,
+          row_end,
+          column_start,
+          column_end,
+        }),
+      ))
     } else {
       if row_start.is_some() && row_end.is_some() {
-        dest.push(Property::GridRow(GridRow {
-          start: std::mem::take(&mut row_start).unwrap(),
-          end: std::mem::take(&mut row_end).unwrap(),
-        }))
+        let (row_start_pos, row_start) = std::mem::take(&mut row_start).unwrap();
+        let (row_end_pos, row_end) = std::mem::take(&mut row_end).unwrap();
+        dest.push((
+          row_start_pos.min(row_end_pos),
+          Property::GridRow(GridRow {
+            start: row_start,
+            end: row_end,
+          }),
+        ))
       }
 
       if column_start.is_some() && column_end.is_some() {
-        dest.push(Property::GridColumn(GridColumn {
-          start: std::mem::take(&mut column_start).unwrap(),
-          end: std::mem::take(&mut column_end).unwrap(),
-        }))
+        let (column_start_pos, column_start) = std::mem::take(&mut column_start).unwrap();
+        let (column_end_pos, column_end) = std::mem::take(&mut column_end).unwrap();
+        dest.push((
+          column_start_pos.min(column_end_pos),
+          Property::GridColumn(GridColumn {
+            start: column_start,
+            end: column_end,
+          }),
+        ))
       }
     }
 
     macro_rules! single_property {
       ($prop: ident, $key: ident) => {
-        if let Some(val) = $key {
-          dest.push(Property::$prop(val))
+        if let Some((pos, val)) = $key {
+          dest.push((pos, Property::$prop(val)))
         }
       };
     }

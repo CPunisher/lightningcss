@@ -2,7 +2,7 @@
 
 use super::{Property, PropertyId};
 use crate::context::PropertyHandlerContext;
-use crate::declaration::{DeclarationBlock, DeclarationList};
+use crate::declaration::{DeclarationBlock, PositionedDeclarationList, PositionedPropertyOption};
 use crate::error::{ParserError, PrinterError};
 use crate::macros::{define_shorthand, enum_property, shorthand_handler, shorthand_property};
 use crate::printer::Printer;
