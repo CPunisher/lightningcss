@@ -938,8 +938,9 @@ impl<'i> BackgroundHandler<'i> {
     self.has_any = false;
 
     macro_rules! push {
-      ($pos: expr, $prop: ident, $val: expr) => {
-        dest.push(($pos, Property::$prop($val)));
+      ($prop: ident, $val: expr) => {
+        let (pos, val) = $val;
+        dest.push((pos, Property::$prop(val)));
         self.flushed_properties.insert(BackgroundProperty::$prop);
       };
     }
@@ -1045,11 +1046,11 @@ impl<'i> BackgroundHandler<'i> {
 
         if !self.flushed_properties.intersects(BackgroundProperty::Background) {
           for fallback in backgrounds.get_fallbacks(context.targets) {
-            push!(pos, Background, fallback);
+            push!(Background, (pos, fallback));
           }
         }
 
-        push!(pos, Background, backgrounds);
+        push!(Background, (pos, backgrounds));
 
         if let Some(clip) = clip_property {
           dest.push((*clips_pos, clip));
@@ -1064,21 +1065,21 @@ impl<'i> BackgroundHandler<'i> {
     if let Some((pos, mut color)) = color {
       if !self.flushed_properties.contains(BackgroundProperty::BackgroundColor) {
         for fallback in color.get_fallbacks(context.targets) {
-          push!(pos, BackgroundColor, fallback);
+          push!(BackgroundColor, (pos, fallback));
         }
       }
 
-      push!(pos, BackgroundColor, color);
+      push!(BackgroundColor, (pos, color));
     }
 
     if let Some((pos, mut images)) = images {
       if !self.flushed_properties.contains(BackgroundProperty::BackgroundImage) {
         for fallback in images.get_fallbacks(context.targets) {
-          push!(pos, BackgroundImage, fallback);
+          push!(BackgroundImage, (pos, fallback));
         }
       }
 
-      push!(pos, BackgroundImage, images);
+      push!(BackgroundImage, (pos, images));
     }
 
     match (&mut x_positions, &mut y_positions) {
@@ -1088,33 +1089,33 @@ impl<'i> BackgroundHandler<'i> {
         let positions = izip!(x_positions.drain(..), y_positions.drain(..))
           .map(|(x, y)| BackgroundPosition { x, y })
           .collect();
-        push!(*x_positions_pos.min(y_positions_pos), BackgroundPosition, positions);
+        push!(BackgroundPosition, (*x_positions_pos.min(y_positions_pos), positions));
       }
       _ => {
         if let Some((pos, x_positions)) = x_positions {
-          push!(pos, BackgroundPositionX, x_positions);
+          push!(BackgroundPositionX, (pos, x_positions));
         }
 
         if let Some((pos, y_positions)) = y_positions {
-          push!(pos, BackgroundPositionY, y_positions);
+          push!(BackgroundPositionY, (pos, y_positions));
         }
       }
     }
 
     if let Some((pos, repeats)) = repeats {
-      push!(pos, BackgroundRepeat, repeats);
+      push!(BackgroundRepeat, (pos, repeats));
     }
 
     if let Some((pos, sizes)) = sizes {
-      push!(pos, BackgroundSize, sizes);
+      push!(BackgroundSize, (pos, sizes));
     }
 
     if let Some((pos, attachments)) = attachments {
-      push!(pos, BackgroundAttachment, attachments);
+      push!(BackgroundAttachment, (pos, attachments));
     }
 
     if let Some((pos, origins)) = origins {
-      push!(pos, BackgroundOrigin, origins);
+      push!(BackgroundOrigin, (pos, origins));
     }
 
     if let Some((pos, (clips, vp))) = clips {

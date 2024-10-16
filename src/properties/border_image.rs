@@ -500,8 +500,9 @@ impl<'i> BorderImageHandler<'i> {
     self.has_any = false;
 
     macro_rules! push {
-      ($pos: expr, $prop: ident, $val: expr) => {
-        dest.push(($pos, Property::$prop($val)));
+      ($prop: ident, $val: expr) => {
+        let (pos, val) = $val;
+        dest.push((pos, Property::$prop(val)));
         self.flushed_properties.insert(BorderImageProperty::$prop);
       };
     }
@@ -563,23 +564,23 @@ impl<'i> BorderImageHandler<'i> {
           }
         }
 
-        push!(pos, BorderImageSource, source);
+        push!(BorderImageSource, (pos, source));
       }
 
       if let Some((pos, slice)) = slice {
-        push!(pos, BorderImageSlice, slice);
+        push!(BorderImageSlice, (pos, slice));
       }
 
       if let Some((pos, width)) = width {
-        push!(pos, BorderImageWidth, width);
+        push!(BorderImageWidth, (pos, width));
       }
 
       if let Some((pos, outset)) = outset {
-        push!(pos, BorderImageOutset, outset);
+        push!(BorderImageOutset, (pos, outset));
       }
 
       if let Some((pos, repeat)) = repeat {
-        push!(pos, BorderImageRepeat, repeat);
+        push!(BorderImageRepeat, (pos, repeat));
       }
     }
 
